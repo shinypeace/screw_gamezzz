@@ -1,3 +1,4 @@
+import './compat';
 import './style.css';
 import Matter from 'matter-js';
 import {Renderer,W,COLORS} from './render';
@@ -5,10 +6,11 @@ import {AudioSystem} from './audio';
 import {platform} from './platform';
 import {progression,SKINS,BACKGROUNDS,BOOSTER_PRICES,LOGIN_REWARDS} from './progression';
 import {Puzzle,generateLevel,LEVEL_COUNT,BOARD_ASPECT} from './puzzle';
+import {samplePivotMotion} from './motion';
 
 type Screen='home'|'levels'|'daily'|'shop'|'collection'|'game';
 type Modal='settings'|'login'|'hearts'|'pause'|'win'|'restart'|'help'|'booster'|null;
-type Pose={id:number;x:number;y:number;length:number;width:number;angle:number;skin:number;layer:number;pivotHole?:number|null};
+type Pose={id:number;x:number;y:number;length:number;width:number;angle:number;skin:number;layer:number;pivotHole?:number|null;angularVelocity?:number;vx?:number;vy?:number};
 type Particle={x:number;y:number;vx:number;vy:number;life:number;max:number;size:number;color:string;angle:number};
 type Falling={body:Matter.Body;pose:Pose;life:number};
 const r=new Renderer(document.querySelector<HTMLCanvasElement>('#canvas')!);
@@ -28,7 +30,7 @@ const fmt=(n:number)=>n.toLocaleString('ru-RU');
 const showToast=(text:string)=>{toast=text;toastUntil=clock+3.2};
 const openModal=(m:Modal)=>{modal=m;audio.play('tap')};
 const setScreen=(s:Screen)=>{screen=s;modal=null;transition=clock;removeMode=false;if(s==='game')void platform.hideBanner();else void platform.showBanner()};
-const daySeed=()=>Number(state().daily.date.replaceAll('-',''));
+const daySeed=()=>Number(state().daily.date.replace(/-/g,''));
 function scatter(x:number,y:number,count=20,confetti=false){
   const colors=['#f5c373','#e6f5e0','#4ec4ac','#d7765c'];
   for(let i=0;i<count;i++){const a=Math.random()*Math.PI*2,v=confetti?90+Math.random()*180:30+Math.random()*110;const life=confetti?2+Math.random():.5+Math.random()*.5;particles.push({x,y,vx:Math.cos(a)*v,vy:Math.sin(a)*v-(confetti?140:20),life,max:life,size:confetti?4+Math.random()*4:2+Math.random()*3,color:colors[i%colors.length],angle:Math.random()*6});}
@@ -43,20 +45,28 @@ function startGame(level:number,daily=false,resume=false){
   setScreen('game');saveGame();audio.play('tap');
 }
 function resumeGame(){const cp=state().checkpoint;if(cp&&(!cp.daily||cp.date===state().daily.date))startGame(cp.level,cp.daily,true);else startGame(Math.min(state().level,LEVEL_COUNT));}
+function visiblePose(raw:Pose):Pose{
+  const tween=tweens.get(raw.id);if(!tween)return raw;
+  const anchor=tween.after.pivotHole==null?undefined:puzzle!.holes[tween.after.pivotHole];
+  const motion=samplePivotMotion(tween.before,tween.after,anchor,clock-tween.start,BOARD_ASPECT);
+  if(motion.settled)tweens.delete(raw.id);
+  return {...raw,...motion};
+}
 function animateMove(result:NonNullable<ReturnType<Puzzle['move']>>,poses:Pose[]){
   audio.play('screw');if(state().settings.haptic)platform.haptic();
   const h=puzzle!.holes[result.to>=0?result.to:result.from];scatter(board.x+h.x*board.w,board.y+h.y*board.h,12);
   const source=puzzle!.holes[result.from];
   screwFlight={from:{x:source.x,y:source.y},to:result.to>=0?{x:h.x,y:h.y}:{x:source.x,y:source.y-.24},hole:result.to,start:clock,removing:result.to<0};
-  for(const pivot of result.pivots)tweens.set(pivot.id,{before:pivot.before as Pose,after:pivot.after as Pose,start:clock});
+  for(const pivot of result.pivots)tweens.set(pivot.id,{before:poses.find(p=>p.id===pivot.id)??pivot.before as Pose,after:pivot.after as Pose,start:clock});
   for(const id of result.dropped){const pose=poses.find(x=>x.id===id);if(!pose)continue;
+    tweens.delete(id);
     const body=Matter.Bodies.rectangle(board.x+pose.x*board.w,board.y+pose.y*board.h,pose.length*board.w,pose.width*board.w,{angle:pose.angle,frictionAir:.018,restitution:.2});
-    Matter.Body.setAngularVelocity(body,(Math.random()-.5)*.1);Matter.Body.setVelocity(body,{x:(Math.random()-.5)*3,y:1});Matter.Composite.add(physics.world,body);falling.push({body,pose,life:2.4});audio.play('drop');}
+    Matter.Body.setAngularVelocity(body,(pose.angularVelocity??0)/60);Matter.Body.setVelocity(body,{x:(pose.vx??0)*board.w/60,y:(pose.vy??0)*board.h/60});Matter.Composite.add(physics.world,body);falling.push({body,pose,life:2.4});audio.play('drop');}
   hintPair=null;saveGame();if(puzzle!.solved)win();
 }
 function holeTap(id:number){
-  if(!puzzle||puzzle.solved||modal||adPending||tweens.size>0||screwFlight)return;
-  const poses=puzzle.livePlanks as Pose[];
+  if(!puzzle||puzzle.solved||modal||adPending||screwFlight)return;
+  const poses=(puzzle.livePlanks as Pose[]).map(visiblePose);
   if(removeMode){
     if(!puzzle.screws[id]){showToast('Выберите винт, который хотите убрать');return;}
     const result=puzzle.removeScrew(id);
@@ -96,7 +106,7 @@ function booster(type:'undo'|'remove'|'shuffle'){
   else{if(!puzzle.addExtraHole()){showToast('Дополнительное отверстие уже открыто');return;}progression.useBooster(type);boosterCount++;saveGame();showToast('Открыто дополнительное отверстие');}
 }
 function hint(){
-  if(!puzzle||puzzle.solved||adPending||tweens.size)return;
+  if(!puzzle||puzzle.solved||adPending||screwFlight)return;
   if(state().boosters.hint<=0){void rewarded({booster:'hint'},()=>{showToast('Подсказка получена');hint()});return;}
   const h=puzzle.hint();
   if(h){progression.useBooster('hint');boosterCount++;hintPair=h;hintUntil=clock+12;audio.play('tap');saveGame();showToast('Перенесите подсвеченный винт в отверстие');}
@@ -238,27 +248,17 @@ function gameplay(){
     const x=board.x+hole.x*board.w,y=board.y+hole.y*board.h;
     c.fillStyle='#573b26';c.beginPath();c.arc(x,y,10.5,0,Math.PI*2);c.fill();c.fillStyle='#ad8956';c.beginPath();c.arc(x,y+2,7.7,0,Math.PI*2);c.fill();c.fillStyle='#392b22';c.beginPath();c.arc(x,y+1,6.5,0,Math.PI*2);c.fill();
   }
-  for(const raw of puzzle.livePlanks as Pose[]){let pose=raw;const tw=tweens.get(raw.id);
-    if(tw){const t=Math.min(1,(clock-tw.start)/.55),e=1-Math.pow(1-t,3),angle=tw.before.angle+(tw.after.angle-tw.before.angle)*e;
-      pose={...raw,x:tw.before.x+(tw.after.x-tw.before.x)*e,y:tw.before.y+(tw.after.y-tw.before.y)*e,angle};
-      if(tw.after.pivotHole!=null){const h=puzzle.holes[tw.after.pivotHole],dx=h.x-tw.before.x,dy=(h.y-tw.before.y)*BOARD_ASPECT;
-        const lx=dx*Math.cos(tw.before.angle)+dy*Math.sin(tw.before.angle),ly=-dx*Math.sin(tw.before.angle)+dy*Math.cos(tw.before.angle);
-        pose.x=h.x-(lx*Math.cos(angle)-ly*Math.sin(angle));pose.y=h.y-(lx*Math.sin(angle)+ly*Math.cos(angle))/BOARD_ASPECT;
-      }
-      if(t>=1)tweens.delete(raw.id);
-    }
-    drawPlank(pose);
-  }
+  for(const raw of puzzle.livePlanks as Pose[])drawPlank(visiblePose(raw));
   for(const hole of puzzle.holes){const x=board.x+hole.x*board.w,y=board.y+hole.y*board.h;
     const reachable=puzzle.canSelect(hole.id);
     if(puzzle.screws[hole.id]&&reachable&&screwFlight?.hole!==hole.id)screwAt(x,y,puzzle.selected===hole.id||removeMode||!!(hintPair&&hintPair.from===hole.id&&clock<hintUntil));
     if(hintPair&&hintPair.to===hole.id&&clock<hintUntil){c.strokeStyle='#79dfb6';c.lineWidth=3;c.beginPath();c.arc(x,y,14+Math.sin(clock*6)*2,0,Math.PI*2);c.stroke();}
     if(!puzzle.screws[hole.id]||reachable)r.hits.push({id:'hole-'+hole.id,label:`Отверстие ${hole.id+1}`,x:x-17,y:y-17,w:34,h:34,fn:()=>holeTap(hole.id)});
   }
-  for(const item of falling){c.save();c.translate(item.body.position.x,item.body.position.y);c.rotate(item.body.angle);c.globalAlpha=Math.min(1,item.life);r.image(`skins/${state().skin}-plank.png`,-item.pose.length*board.w/2,-item.pose.width*board.w/2,item.pose.length*board.w,item.pose.width*board.w);c.restore();}
-  if(screwFlight){const flight=screwFlight,t=Math.min(1,(clock-flight.start)/.46),e=1-Math.pow(1-t,3);
+  for(const item of falling){c.save();c.translate(item.body.position.x,item.body.position.y);c.rotate(item.body.angle);c.globalAlpha=Math.min(1,item.life);const asset=`skins/${state().skin}-plank.png`;r.image(r.images.has(asset)?asset:'plank.png',-item.pose.length*board.w/2,-item.pose.width*board.w/2,item.pose.length*board.w,item.pose.width*board.w);c.restore();}
+  if(screwFlight){const flight=screwFlight,t=Math.min(1,(clock-flight.start)/.46),e=t*t*(3-2*t);
     const fx=board.x+(flight.from.x+(flight.to.x-flight.from.x)*e)*board.w,fy=board.y+(flight.from.y+(flight.to.y-flight.from.y)*e)*board.h-Math.sin(t*Math.PI)*35;
-    c.save();c.translate(fx,fy);c.rotate(t*Math.PI*4);c.globalAlpha=flight.removing?1-t:1;const size=26+Math.sin(t*Math.PI)*9;r.image(`skins/${state().skin}-screw.png`,-size/2,-size/2,size,size);c.restore();
+    c.save();c.translate(fx,fy);c.rotate(t*Math.PI*4);c.globalAlpha=flight.removing?1-t:1;const size=26+Math.sin(t*Math.PI)*9,asset=`skins/${state().skin}-screw.png`;r.image(r.images.has(asset)?asset:'screw.png',-size/2,-size/2,size,size);c.restore();
     if(t>=1){screwFlight=null;scatter(fx,fy,9);}
   }
   const footerY=r.h-131;
@@ -343,10 +343,11 @@ function dialog(){
 }
 function syncAudio(){audio.sound=state().settings.sound;audio.music=state().settings.music;}
 function draw(now:number){
-  const wallDt=Math.max(0,(now-last)/1000),dt=Math.min(.04,wallDt);last=now;clock+=dt;
+  const wallDt=Math.max(0,(now-last)/1000),simulationPaused=platform.paused||document.hidden||adPending||(screen==='game'&&modal!==null);
+  const dt=simulationPaused?0:Math.min(.04,wallDt);last=now;clock+=dt;
   if(ready){
     if(screen==='game'&&!modal&&!platform.paused&&!document.hidden&&!adPending&&puzzle&&!puzzle.solved)elapsed+=wallDt;
-    Matter.Engine.update(physics,dt*1000);
+    if(dt>0)Matter.Engine.update(physics,dt*1000);
     falling=falling.filter(item=>{item.life-=dt;if(item.life<=0){Matter.Composite.remove(physics.world,item.body);return false;}return true;});
     r.hits=[];r.background(state().background,screen==='game'?.06:.21);
     ({home,levels,daily,shop,collection,game:gameplay}[screen])();
@@ -370,10 +371,9 @@ platform.onBanner(height=>{r.insets.banner=height;r.resize()});
 platform.onSafeArea(area=>{r.insets.top=area.top;r.insets.bottom=area.bottom;r.resize()});
 window.setInterval(()=>{if(ready){progression.tick();saveGame()}},15000);
 async function boot(){
-  await platform.init();await progression.init();await r.load();
-  // Optional material variants are preloaded after the core UI has become ready.
-  await Promise.all(SKINS.flatMap(item=>['screw','plank'].map(async kind=>{const im=new Image();const key=`skins/${item.id}-${kind}.png`;im.src=`${import.meta.env.BASE_URL}assets/${key}`;await new Promise<void>(res=>{im.onload=()=>res();im.onerror=()=>res()});if(im.naturalWidth)r.images.set(key,im)})));
+  await Promise.all([r.load(),(async()=>{await platform.init();await progression.init()})()]);
   syncAudio();levelPage=Math.min(23,Math.floor((state().level-1)/25));ready=true;document.getElementById('loading')!.remove();void platform.showBanner();
+  void Promise.all(SKINS.flatMap(item=>['screw','plank'].map(kind=>r.loadAsset(`skins/${item.id}-${kind}.png`))));
   if(state().login.lastClaim!==state().daily.date)window.setTimeout(()=>{if(screen==='home')modal='login'},1200);
   requestAnimationFrame(draw);
 }

@@ -184,10 +184,16 @@ test('sanitization rejects invalid economy and checkpoint identity; all levels f
   assert.equal(state.boosters.hint, 0);
   assert.equal(state.level, 1);
   assert.equal(state.skin, 'classic');
-  const puzzle = new Puzzle(generateLevel(1, 123_456));
+  const puzzle = new Puzzle(generateLevel(1));
   const checkpoint = { level: 1, daily: false, date: dailyDate(initialTime), snapshot: puzzle.snapshot(), seconds: 2, boosterCount: 0 };
   const resumed = sanitizeProgress({ ...state, checkpoint }, initialTime);
   assert.deepEqual(resumed.checkpoint?.snapshot, puzzle.snapshot(), 'saved seed must reconstruct the same geometry');
+  const obsolete={...checkpoint,snapshot:{...puzzle.snapshot(),seed:123456}};
+  assert.equal(sanitizeProgress({...state,checkpoint:obsolete},initialTime).checkpoint,null,'An obsolete campaign seed cannot select a random daily board');
+  const date=dailyDate(initialTime),dailyPuzzle=new Puzzle(generateLevel(1,Number(date.replaceAll('-',''))));
+  const dailyCheckpoint={...checkpoint,daily:true,date,snapshot:dailyPuzzle.snapshot()};
+  assert.deepEqual(sanitizeProgress({...state,checkpoint:dailyCheckpoint},initialTime).checkpoint?.snapshot,dailyPuzzle.snapshot(),'The current daily seed resumes exactly');
+  assert.equal(sanitizeProgress({...state,checkpoint:{...dailyCheckpoint,snapshot:{...dailyPuzzle.snapshot(),seed:123456}}},initialTime).checkpoint,null,'An obsolete daily seed is rejected');
   assert.equal(sanitizeProgress({ ...state, checkpoint: { ...checkpoint, level: 2 } }, initialTime).checkpoint, null);
   for (let level = 1; level <= 600; level++) resumed.stars[String(level)] = 3;
   resumed.level = 601;

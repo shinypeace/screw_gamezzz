@@ -1,6 +1,7 @@
 /** Pure, deterministic rules for the wooden screw puzzle. Coordinates are in
  * board units: x/y are normalized, lengths use board width, angles use radians.
  * The reference board is 1 × 1.2. Rendering can tween getPose() between moves. */
+import { LEVEL_CATALOG } from './level-catalog';
 export const LEVEL_COUNT = 600;
 export const BOARD_ASPECT = 1.2;
 
@@ -25,17 +26,6 @@ export interface MoveResult extends Move {
   before: PlankPose[];
 }
 
-function seeded(seed: number) {
-  let s = seed >>> 0;
-  return () => {
-    s += 0x6d2b79f5;
-    let t = Math.imul(s ^ (s >>> 15), 1 | s);
-    t ^= t + Math.imul(t ^ (t >>> 7), 61 | t);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-const sq = (v: number) => v * v;
-const round = (v: number) => Math.round(v * 100000) / 100000;
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 
 /** Rectangle intersection in the same metric as the canvas renderer. */
@@ -205,7 +195,25 @@ export class Puzzle {
   /** Search only moves that permanently release supports first. Board-only
    * screws can then be relocated if a parking hole is obstructed. Monotonic
    * support release bounds normal solution depth by initial screw count. */
-  findSolution(budget = 24000): Move[] | null {
+  findSolution(budget = 24000, timeBudgetMs = Infinity): Move[] | null {
+    // Runtime hints get a wall-clock limit; the offline catalogue builder keeps
+    // its node budget without a deadline. A large search must not freeze a VK
+    // WebView after the player leaves the authored solution path.
+    const deadline = Number.isFinite(timeBudgetMs)
+      ? performance.now() + Math.max(0, timeBudgetMs) : Infinity;
+    const expired = () => deadline !== Infinity && performance.now() >= deadline;
+    // The catalogue already contains a complete legal solution. Reuse it when
+    // the player is on that path, so the first hint never searches thousands
+    // of states on a phone. Extra unused drill holes preserve this fast path.
+    const authored = new Puzzle(this.level);
+    for (let i = 0; this.level.witness.length > 0 && i <= this.level.witness.length; i++) {
+      if (authored.screws.every((v, h) => v === this.screws[h]) &&
+        authored.released.every((v, h) => v === this.released[h]) &&
+        authored.removed.every((v, p) => v === this.removed[p]) &&
+        this.screws.slice(authored.screws.length).every(v => !v)) return this.level.witness.slice(i);
+      const step = this.level.witness[i];
+      if (!step || !authored.move(step.from, step.to)) break;
+    }
     const search = new Puzzle(this.level);
     search.restore(this.snapshot());
     const visited = new Set<string>();
@@ -213,7 +221,7 @@ export class Puzzle {
     const key = () => search.screws.map(v => +v).join('') + '/' + search.released.map(v => +v).join('');
     const visit = (depth: number): Move[] | null => {
       if (search.solved) return [];
-      if (++nodes > budget || depth > search.holes.length * 2 + 6) return null;
+      if (++nodes > budget || depth > search.holes.length * 2 + 6 || expired()) return null;
       const k = key(); if (visited.has(k)) return null; visited.add(k);
       const live = search.livePlanks;
       const src = search.holes.filter(h => search.screws[h.id] && search.canSelect(h.id) && search.isAttached(h.id));
@@ -225,15 +233,22 @@ export class Puzzle {
       // The top parking row cannot be hit by a downward hanging strip.
       destinations.sort((a, b) => a.y - b.y || a.id - b.id);
       const choices: Move[] = [];
-      for (const from of src) for (const to of destinations) if (search.canMove(from.id, to.id)) choices.push({ from: from.id, to: to.id });
+      for (const from of src) {
+        if (expired()) return null;
+        for (const to of destinations) if (search.canMove(from.id, to.id)) choices.push({ from: from.id, to: to.id });
+      }
       // If there is no progress move, reposition a parked screw to free a
       // reliable parking hole. A visited set prevents harmless swap cycles.
       if (choices.length === 0) {
         const parked = search.holes.filter(h => search.screws[h.id] && !search.isAttached(h.id) && search.canSelect(h.id));
-        for (const from of parked) for (const to of destinations) if (search.canMove(from.id, to.id)) choices.push({ from: from.id, to: to.id });
+        for (const from of parked) {
+          if (expired()) return null;
+          for (const to of destinations) if (search.canMove(from.id, to.id)) choices.push({ from: from.id, to: to.id });
+        }
       }
       const checkpoint = search.snapshot();
       for (const choice of choices) {
+        if (expired()) return null;
         search.move(choice.from, choice.to);
         const suffix = visit(depth + 1);
         search.restore(checkpoint);
@@ -246,7 +261,7 @@ export class Puzzle {
   hint(): Move | null {
     if (this.solved) return null;
     // All hints include both the source and destination and are legal now.
-    const solution = this.findSolution(30000);
+    const solution = this.findSolution(30000, 70);
     return solution?.[0] ?? null;
   }
   shuffle(): MoveResult | null {
@@ -255,157 +270,19 @@ export class Puzzle {
   }
 }
 
-interface Point { x: number; y: number }
-interface Segment { a: Point; b: Point }
-function makeLayout(count: number, motif: number, rand: () => number): Segment[] {
-  const lines: Segment[] = [];
-  const add = (ax: number, ay: number, bx: number, by: number) => lines.push({ a: { x: ax, y: ay }, b: { x: bx, y: by } });
-  if (motif === 0) {
-    // Ladder with shared corner screws; removing one screw releases every
-    // strip drilled through it. Longer ladders introduce real dependencies.
-    const rows = Math.max(2, Math.ceil((count + 2) / 3));
-    const ys = Array.from({ length: rows }, (_, i) => .3 + i * .49 / (rows - 1));
-    for (const y of ys) add(.19, y, .81, y);
-    for (let i = 0; lines.length < count && i < rows - 1; i++) {
-      add(.19, ys[i], .19, ys[i + 1]);
-      if (lines.length < count) add(.81, ys[i], .81, ys[i + 1]);
-    }
-    if (lines.length < count) add(.19, ys[0], .81, ys[rows - 1]);
-  } else if (motif === 1) {
-    // Dense stars share the ring's supports instead of cramming 32 screw
-    // heads onto a phone-sized circle. Each pin remains at least ~38 logical
-    // pixels from its neighbour on the reference mobile board.
-    const offset = rand() * .12;
-    const vertices = count < 8 ? count * 2 : count + count % 2;
-    const step = count < 8 ? count : vertices / 2 - 1;
-    const points = Array.from({ length: vertices }, (_, i) => {
-      const t = offset + Math.PI * 2 * i / vertices;
-      return { x: .5 + Math.cos(t) * .345, y: .56 + Math.sin(t) * .288 };
-    });
-    for (let i = 0; i < count; i++) {
-      const a = points[i], b = points[(i + step) % vertices];
-      add(a.x, a.y, b.x, b.y);
-    }
-  } else if (motif === 2) {
-    // Nested diamonds use two exposed endpoints per bar and look like an
-    // intricate wooden lock instead of a random pile.
-    const rings = Math.ceil(count / 4);
-    for (let ring = 0; ring < rings && lines.length < count; ring++) {
-      const inset = ring * .092;
-      const pts = [{ x: .5, y: .235 + inset }, { x: .85 - inset, y: .56 },
-        { x: .5, y: .885 - inset }, { x: .15 + inset, y: .56 }];
-      for (let j = 0; j < 4 && lines.length < count; j++) add(pts[j].x, pts[j].y, pts[(j + 1) % 4].x, pts[(j + 1) % 4].y);
-    }
-  } else {
-    // Workshop weave: broad horizontal strips, tall supports and diagonals.
-    const horizontal = Math.min(7, Math.max(2, count - 4));
-    for (let i = 0; i < horizontal; i++) {
-      const y = .30 + i * .49 / Math.max(1, horizontal - 1);
-      add(.17, y, .83, y);
-    }
-    const vertical = Math.min(3, count - lines.length);
-    for (let i = 0; i < vertical; i++) {
-      const x = .3 + i * .4 / Math.max(1, vertical - 1);
-      add(x, .245, x, .87);
-    }
-    while (lines.length < count) {
-      const i = lines.length - horizontal - vertical;
-      const y = .23;
-      if (i % 2 === 0) add(.115, y, .885, .90);
-      else add(.885, y, .115, .90);
-    }
-  }
-  return lines.slice(0, count);
-}
-
-function buildLevel(index: number, seed: number, attempt: number): Level {
-  const rand = seeded(seed + attempt * 15485863);
-  const count = Math.min(16, 4 + Math.floor((index - 1) / 35));
-  let motif = index <= 3 ? 3 : (index + Math.floor(rand() * 4) + attempt) % 4;
-  // Extra parallel diagonals would drill several unintended shared supports.
-  // Dense late-game boards use the ring, ladder, and diamond architectures.
-  if (count > 12 && motif === 3) motif = (index + attempt) % 3;
-  const segments = makeLayout(count, motif, rand);
-  // Small coherent transformations preserve the readable architecture while
-  // giving every seeded board its own silhouette and support positions.
-  const scaleX = .95 + rand() * .075, scaleY = .95 + rand() * .075;
-  const tilt = index <= 3 ? 0 : (rand() - .5) * .09;
-  for (const segment of segments) for (const point of [segment.a, segment.b]) {
-    const dx = (point.x - .5) * scaleX, dy = (point.y - .56) * BOARD_ASPECT * scaleY;
-    point.x = .5 + dx * Math.cos(tilt) - dy * Math.sin(tilt);
-    point.y = .56 + (dx * Math.sin(tilt) + dy * Math.cos(tilt)) / BOARD_ASPECT;
-  }
-  const holes: Hole[] = [];
-  const addHole = (p: Point, initialScrew: boolean): number => {
-    const found = holes.find(h => sq(h.x - p.x) + sq((h.y - p.y) * BOARD_ASPECT) < .00016);
-    if (found) return found.id;
-    const id = holes.length;
-    holes.push({ id, x: round(p.x), y: round(p.y), initialScrew });
-    return id;
-  };
-  // Three parking holes on first levels; two thereafter to create choices.
-  const parking = index <= 8 || attempt > 1 ? 3 : 2;
-  for (let i = 0; i < parking; i++) addHole({ x: parking === 2 ? .35 + i * .3 : .23 + i * .27, y: .145 }, false);
-  for (const segment of segments) { addHole(segment.a, true); addHole(segment.b, true); }
-  const planks: Plank[] = segments.map((s, i) => {
-    const dx = s.b.x - s.a.x, dy = (s.b.y - s.a.y) * BOARD_ASPECT;
-    return { id: i, x: round((s.a.x + s.b.x) / 2), y: round((s.a.y + s.b.y) / 2),
-      length: round(Math.hypot(dx, dy) + .085), width: motif === 1 ? .063 : .069,
-      angle: Math.atan2(dy, dx), layer: i, skin: (i + Math.floor(rand() * 3)) % 4, pinHoles: [] };
-  });
-  // Every screw passing through a strip is an actual drilled support, not a
-  // visually hidden screw. Shared supports faithfully model layered wood.
-  for (const p of planks) p.pinHoles = holes.filter(h => h.initialScrew && plankContains(p, h, -.008)).map(h => h.id);
-  const names = ['Лестница мастера', 'Деревянная звезда', 'Секретный замок', 'Переплетение'];
-  return { id: index, seed, name: names[motif], difficulty: Math.min(5, 1 + Math.floor((count - 4) / 3)),
-    motif: ['ladder', 'star', 'diamond', 'weave'][motif], holes, planks, witness: [], par: 0 };
-}
-
-/** A level is returned only after its full legal solution has been found and
- * replayed. Level IDs beyond 600 can be used for dated daily challenges. */
-const generatedCache = new Map<string, Level>();
+/** Campaign boards are authored and solved offline. Choosing a board is O(1)
+ * and keeps the first thirty distinct teaching architectures intact. The new
+ * catalogue seed also rejects checkpoints from the obsolete four-template
+ * generator instead of applying their screw arrays to a different drawing. */
 export function generateLevel(index: number, seedOverride?: number): Level {
   index = Math.max(1, Math.floor(index));
-  const seed = (seedOverride ?? Math.imul(index, 2654435761)) >>> 0;
-  const cacheKey = `${index}/${seed}`;
-  const cached = generatedCache.get(cacheKey);
-  if (cached) return cached;
-  for (let attempt = 0; attempt < 6; attempt++) {
-    const level = buildLevel(index, seed, attempt);
-    const witness = new Puzzle(level).findSolution(attempt < 2 ? 6000 : 18000);
-    if (!witness) continue;
-    const replay = new Puzzle(level);
-    if (!witness.every(m => Boolean(replay.move(m.from, m.to))) || !replay.solved) continue;
-    level.witness = witness; level.par = witness.length;
-    generatedCache.set(cacheKey, level);
-    return level;
-  }
-  // A safe fallback keeps unusual user supplied daily seeds playable. It is
-  // still a real multi-strip puzzle, with shared hinges and legal relocation.
-  const safe = buildLevel(index, seed, 2);
-  const count = Math.min(16, 4 + Math.floor((index - 1) / 35));
-  // Fallback uses independent, well separated diameters. Its narrower strips
-  // preserve screw access even for pathological custom seeds.
-  const rand = seeded(seed), offset = rand() * .12;
-  const segments: Segment[] = Array.from({ length: count }, (_, i) => {
-    const t = offset + Math.PI * i / count;
-    return { a: { x: .5 + Math.cos(t) * .335, y: .56 + Math.sin(t) * .29 },
-      b: { x: .5 - Math.cos(t) * .335, y: .56 - Math.sin(t) * .29 } };
-  });
-  safe.motif = 'star'; safe.name = 'Деревянная звезда';
-  safe.holes = [{ id: 0, x: .23, y: .145, initialScrew: false }, { id: 1, x: .5, y: .145, initialScrew: false }, { id: 2, x: .77, y: .145, initialScrew: false }];
-  safe.planks = segments.map((s, i) => {
-    const a = safe.holes.length;
-    safe.holes.push({ id: a, ...s.a, initialScrew: true }, { id: a + 1, ...s.b, initialScrew: true });
-    return { id: i, x: (s.a.x + s.b.x) / 2, y: (s.a.y + s.b.y) / 2,
-      length: Math.hypot(s.b.x - s.a.x, (s.b.y - s.a.y) * BOARD_ASPECT) + .065, width: .031,
-      angle: Math.atan2((s.b.y - s.a.y) * BOARD_ASPECT, s.b.x - s.a.x), layer: i, skin: i % 4, pinHoles: [a, a + 1] };
-  });
-  const witness = new Puzzle(safe).findSolution(80000);
-  if (!witness) throw new Error(`Unable to construct a playable puzzle for level ${index}, seed ${seed}`);
-  safe.witness = witness; safe.par = witness.length;
-  generatedCache.set(cacheKey, safe);
-  return safe;
+  const campaign = LEVEL_CATALOG[(index - 1) % LEVEL_COUNT];
+  if (seedOverride === undefined || (seedOverride >>> 0) === campaign.seed) return campaign;
+  // Dated challenges draw from the tougher catalogue, preserving a verified
+  // mechanical puzzle and full witness rather than running DFS on a phone.
+  const seed = seedOverride >>> 0;
+  const selected = LEVEL_CATALOG[80 + ((Math.imul(seed ^ (seed >>> 16), 2246822519) >>> 0) % 520)];
+  return { ...selected, id: index, seed };
 }
 
 export function generateDailyLevel(date: string): Level {

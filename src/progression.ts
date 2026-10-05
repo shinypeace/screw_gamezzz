@@ -142,6 +142,10 @@ function sanitizeCheckpoint(value: unknown, state: ProgressState, now: number): 
   const screws = boolArray(raw.screws), released = boolArray(raw.released), removed = boolArray(raw.removed);
   if (!screws || !released || !removed || raw.version !== 1 || raw.levelId !== level || !Number.isInteger(raw.seed) || Number(raw.seed) < 0 || Number(raw.seed) > 4_294_967_295 || !Number.isInteger(raw.moves) || Number(raw.moves) < 0 || Number(raw.moves) > 100_000) return null;
   try {
+    // A different catalogue must never reinterpret saved screw bitsets as a
+    // random daily board. Keep earned currency/stars and discard only that attempt.
+    const expectedSeed=daily?Number(date.replace(/-/g,'')):generateLevel(level).seed;
+    if(Number(raw.seed)!==expectedSeed)return null;
     const generated = generateLevel(Number(raw.levelId), Number(raw.seed));
     let holes: Hole[];
     if (raw.compact === 1) {

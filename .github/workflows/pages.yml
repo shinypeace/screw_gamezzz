@@ -23,6 +23,13 @@ jobs:
       - run: npm run build
       - run: npm test
       - run: npm run validate:levels
+      - name: Verify Pages entry
+        run: |
+          test -f dist/index.html
+          test -f dist/.nojekyll
+          test -f index.html
+          if grep -q '/src/main.ts' dist/index.html; then exit 1; fi
+          if ! grep -q 'src="./assets/.*.js"' dist/index.html; then exit 1; fi
       - uses: actions/configure-pages@v5
         with:
           enablement: true

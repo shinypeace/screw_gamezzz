@@ -25,14 +25,29 @@ export class Renderer {
     this.canvas.width=Math.round(rect.width*dpr);this.canvas.height=Math.round(rect.height*dpr);
     this.c.setTransform(dpr*this.scale,0,0,dpr*this.scale,0,0);
   }
+  /** Late or failed network requests must never hold the loading screen. */
+  async loadAsset(file:string, timeout=8_000): Promise<boolean> {
+    const img=new Image();
+    const loaded=await new Promise<boolean>(resolve=>{
+      let settled=false;
+      const finish=(success:boolean)=>{
+        if(settled)return;settled=true;clearTimeout(timer);
+        img.onload=null;img.onerror=null;resolve(success);
+      };
+      const timer=setTimeout(()=>{finish(false);img.removeAttribute('src')},timeout);
+      img.onload=()=>finish(img.naturalWidth>0);img.onerror=()=>finish(false);
+      img.src=`${import.meta.env.BASE_URL}assets/${file}`;
+    });
+    if(loaded)this.images.set(file,img);
+    return loaded;
+  }
   async load() {
     const files=['ui/button-primary.png','ui/button-secondary.png','ui/button-square.png','ui/panel.png','ui/badge-ad.png','mystery.png','board.png','plank.png','screw.png',...iconNames.map(x=>`icons/${x}.png`),...['workshop','midnight','forest','sunset','arctic'].map(x=>`backgrounds/${x}.webp`)];
     let loaded=0;
     await Promise.all(files.map(async file=>{
-      const img=new Image(); img.src=`${import.meta.env.BASE_URL}assets/${file}`;
-      await new Promise<void>(res=>{img.onload=()=>res();img.onerror=()=>res()});
-      if(img.naturalWidth)this.images.set(file,img);
-      document.getElementById('load-progress')!.style.width=`${++loaded/files.length*100}%`;
+      await this.loadAsset(file);
+      const progress=document.getElementById('load-progress');
+      if(progress)progress.style.width=`${++loaded/files.length*100}%`;
     }));
   }
   image(key:string,x:number,y:number,w:number,h:number,alpha=1) {
@@ -95,7 +110,8 @@ export class Renderer {
   hit(x:number,y:number) {
     const holes=this.hits.filter(h=>h.id.startsWith('hole-')&&!h.disabled&&Math.hypot(x-h.x-h.w/2,y-h.y-h.h/2)<=h.w/2);
     if(holes.length)return holes.sort((a,b)=>Math.hypot(x-a.x-a.w/2,y-a.y-a.h/2)-Math.hypot(x-b.x-b.w/2,y-b.y-b.h/2))[0];
-    return this.hits.findLast(h=>!h.disabled&&x>=h.x&&x<=h.x+h.w&&y>=h.y&&y<=h.y+h.h);
+    for(let i=this.hits.length-1;i>=0;i--){const h=this.hits[i];if(!h.disabled&&x>=h.x&&x<=h.x+h.w&&y>=h.y&&y<=h.y+h.h)return h;}
+    return undefined;
   }
   coordinates(e:PointerEvent){const rect=this.canvas.getBoundingClientRect();return{x:(e.clientX-rect.left)/this.scale,y:(e.clientY-rect.top)/this.scale};}
 }
