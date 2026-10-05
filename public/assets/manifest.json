@@ -1,0 +1,257 @@
+{
+  "ui/button-primary.png": {
+    "path": "/assets/ui/button-primary.png",
+    "width": 545,
+    "height": 185
+  },
+  "ui/button-secondary.png": {
+    "path": "/assets/ui/button-secondary.png",
+    "width": 548,
+    "height": 191
+  },
+  "ui/button-square.png": {
+    "path": "/assets/ui/button-square.png",
+    "width": 256,
+    "height": 247
+  },
+  "ui/button-square-dark.png": {
+    "path": "/assets/ui/button-square-dark.png",
+    "width": 256,
+    "height": 251
+  },
+  "ui/panel.png": {
+    "path": "/assets/ui/panel.png",
+    "width": 393,
+    "height": 454
+  },
+  "board.png": {
+    "path": "/assets/board.png",
+    "width": 406,
+    "height": 451
+  },
+  "plank.png": {
+    "path": "/assets/plank.png",
+    "width": 636,
+    "height": 144
+  },
+  "screw.png": {
+    "path": "/assets/screw.png",
+    "width": 192,
+    "height": 191
+  },
+  "icons/home.png": {
+    "path": "/assets/icons/home.png",
+    "width": 189,
+    "height": 192
+  },
+  "icons/shop.png": {
+    "path": "/assets/icons/shop.png",
+    "width": 192,
+    "height": 170
+  },
+  "icons/wardrobe.png": {
+    "path": "/assets/icons/wardrobe.png",
+    "width": 192,
+    "height": 188
+  },
+  "icons/gear.png": {
+    "path": "/assets/icons/gear.png",
+    "width": 192,
+    "height": 192
+  },
+  "icons/back.png": {
+    "path": "/assets/icons/back.png",
+    "width": 192,
+    "height": 159
+  },
+  "icons/pause.png": {
+    "path": "/assets/icons/pause.png",
+    "width": 162,
+    "height": 181
+  },
+  "icons/play.png": {
+    "path": "/assets/icons/play.png",
+    "width": 157,
+    "height": 192
+  },
+  "icons/coin.png": {
+    "path": "/assets/icons/coin.png",
+    "width": 185,
+    "height": 192
+  },
+  "icons/heart.png": {
+    "path": "/assets/icons/heart.png",
+    "width": 192,
+    "height": 167
+  },
+  "icons/star.png": {
+    "path": "/assets/icons/star.png",
+    "width": 192,
+    "height": 184
+  },
+  "icons/gift.png": {
+    "path": "/assets/icons/gift.png",
+    "width": 190,
+    "height": 192
+  },
+  "icons/trophy.png": {
+    "path": "/assets/icons/trophy.png",
+    "width": 192,
+    "height": 180
+  },
+  "icons/hammer.png": {
+    "path": "/assets/icons/hammer.png",
+    "width": 192,
+    "height": 192
+  },
+  "icons/undo.png": {
+    "path": "/assets/icons/undo.png",
+    "width": 192,
+    "height": 168
+  },
+  "icons/shuffle.png": {
+    "path": "/assets/icons/shuffle.png",
+    "width": 192,
+    "height": 152
+  },
+  "icons/hint.png": {
+    "path": "/assets/icons/hint.png",
+    "width": 132,
+    "height": 192
+  },
+  "icons/sound.png": {
+    "path": "/assets/icons/sound.png",
+    "width": 192,
+    "height": 156
+  },
+  "icons/music.png": {
+    "path": "/assets/icons/music.png",
+    "width": 171,
+    "height": 182
+  },
+  "icons/calendar.png": {
+    "path": "/assets/icons/calendar.png",
+    "width": 181,
+    "height": 192
+  },
+  "icons/check.png": {
+    "path": "/assets/icons/check.png",
+    "width": 192,
+    "height": 161
+  },
+  "icons/lock.png": {
+    "path": "/assets/icons/lock.png",
+    "width": 154,
+    "height": 192
+  },
+  "icons/close.png": {
+    "path": "/assets/icons/close.png",
+    "width": 192,
+    "height": 190
+  },
+  "icons/plus.png": {
+    "path": "/assets/icons/plus.png",
+    "width": 192,
+    "height": 190
+  },
+  "icons/screw.png": {
+    "path": "/assets/icons/screw.png",
+    "width": 188,
+    "height": 192
+  },
+  "skins/classic-screw.png": {
+    "path": "/assets/skins/classic-screw.png",
+    "width": 191,
+    "height": 192
+  },
+  "skins/classic-plank.png": {
+    "path": "/assets/skins/classic-plank.png",
+    "width": 393,
+    "height": 146
+  },
+  "skins/chrome-screw.png": {
+    "path": "/assets/skins/chrome-screw.png",
+    "width": 192,
+    "height": 192
+  },
+  "skins/chrome-plank.png": {
+    "path": "/assets/skins/chrome-plank.png",
+    "width": 396,
+    "height": 146
+  },
+  "skins/gold-screw.png": {
+    "path": "/assets/skins/gold-screw.png",
+    "width": 191,
+    "height": 192
+  },
+  "skins/gold-plank.png": {
+    "path": "/assets/skins/gold-plank.png",
+    "width": 394,
+    "height": 146
+  },
+  "skins/aurora-screw.png": {
+    "path": "/assets/skins/aurora-screw.png",
+    "width": 191,
+    "height": 192
+  },
+  "skins/aurora-plank.png": {
+    "path": "/assets/skins/aurora-plank.png",
+    "width": 393,
+    "height": 149
+  },
+  "skins/neon-screw.png": {
+    "path": "/assets/skins/neon-screw.png",
+    "width": 192,
+    "height": 192
+  },
+  "skins/neon-plank.png": {
+    "path": "/assets/skins/neon-plank.png",
+    "width": 396,
+    "height": 148
+  },
+  "skins/candy-screw.png": {
+    "path": "/assets/skins/candy-screw.png",
+    "width": 192,
+    "height": 192
+  },
+  "skins/candy-plank.png": {
+    "path": "/assets/skins/candy-plank.png",
+    "width": 394,
+    "height": 147
+  },
+  "backgrounds/midnight.webp": {
+    "path": "/assets/backgrounds/midnight.webp",
+    "width": 512,
+    "height": 768
+  },
+  "backgrounds/forest.webp": {
+    "path": "/assets/backgrounds/forest.webp",
+    "width": 512,
+    "height": 768
+  },
+  "backgrounds/sunset.webp": {
+    "path": "/assets/backgrounds/sunset.webp",
+    "width": 512,
+    "height": 768
+  },
+  "backgrounds/arctic.webp": {
+    "path": "/assets/backgrounds/arctic.webp",
+    "width": 512,
+    "height": 768
+  },
+  "backgrounds/workshop.webp": {
+    "path": "/assets/backgrounds/workshop.webp",
+    "width": 941,
+    "height": 1672
+  },
+  "ui/badge-ad.png": {
+    "path": "/assets/ui/badge-ad.png",
+    "width": 320,
+    "height": 137
+  },
+  "mystery.png": {
+    "path": "/assets/mystery.png",
+    "width": 384,
+    "height": 301
+  }
+}

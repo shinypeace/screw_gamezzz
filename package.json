@@ -1,0 +1,26 @@
+{
+  "name": "screw-workshop",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "validate:levels": "tsx scripts/validate-levels.ts",
+    "test": "tsx --test src/platform.test.ts src/progression.test.ts"
+  },
+  "dependencies": {
+    "@vkontakte/vk-bridge": "^2.15.11",
+    "matter-js": "^0.20.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.0",
+    "@types/matter-js": "^0.20.2",
+    "@types/node": "^22.20.5",
+    "sharp": "^0.35.5",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.9"
+  }
+}

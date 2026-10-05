@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.local/
+preview-materials/
+playwright-report/
+test-results/
+*.log
+Thumbs.db
+scripts/inspect-video.py
+scripts/assets_prepare.py
