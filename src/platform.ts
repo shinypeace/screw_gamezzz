@@ -193,7 +193,7 @@ export class VKPlatform {
         if (!unsupported(error)) throw error;
         data = await this.send('VKWebAppShowBannerAd', { banner_location: 'bottom' }, 10_000);
       }
-      // A gameplay transition may hide the banner while Show is unresolved.
+      // An explicit hide may arrive while Show is unresolved.
       // Hide again after the pending native Show completes to prevent overlap.
       if (!this.bannerWanted) {
         try { await this.send('VKWebAppHideBannerAd'); } catch { /* Best effort. */ }

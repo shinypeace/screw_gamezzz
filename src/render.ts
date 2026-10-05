@@ -18,6 +18,7 @@ export class Renderer {
     const maxW=Math.min(window.innerWidth,viewHeight*.57,520);
     el.style.width=`${maxW}px`;
     el.style.height=`${viewHeight}px`;
+    el.style.marginTop=`${this.insets.top}px`;
     const rect=el.getBoundingClientRect();
     this.scale=Math.min(rect.width/W,rect.height/680);
     this.h=rect.height/this.scale;

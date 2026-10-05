@@ -156,24 +156,39 @@ test('hearts recover every thirty minutes across closures and wins can refund th
   } finally { progress.dispose(); }
 });
 
-test('cosmetic progression costs 21000 coins and enforces level gates through level 300', async () => {
+test('all cosmetics can be bought at level one with enough coins and the collection costs 21000', async () => {
   const progress = new Progression(platform().vk, () => initialTime);
   try {
     await progress.init();
-    assert.equal(SKINS.reduce((sum, item) => sum + item.price, 0), 13_000);
-    assert.equal(BACKGROUNDS.reduce((sum, item) => sum + item.price, 0), 8_000);
-    progress.rewardCoins(10_000); progress.rewardCoins(10_000); progress.rewardCoins(10_000);
-    assert.equal(progress.canBuyCosmetic('skins', 'chrome'), false);
+    assert.equal(SKINS.reduce((sum, item) => sum + item.price, 0), 10_700);
+    assert.equal(BACKGROUNDS.reduce((sum, item) => sum + item.price, 0), 10_300);
+    assert.equal(progress.canBuyCosmetic('skins', 'chrome'), false, 'the only purchase constraint is the coin balance');
     assert.equal(progress.buyCosmetic('skin', 'chrome'), false);
-    for (let level = 1; level < 300; level++) progress.completeLevel(level, 3);
-    assert.equal(progress.state.level, 300);
-    assert.equal(progress.canBuyCosmetic('backgrounds', 'arctic'), false);
-    progress.completeLevel(300, 3);
-    assert.equal(progress.state.level, 301);
+    progress.rewardCoins(10_000); progress.rewardCoins(10_000); progress.rewardCoins(10_000);
+    assert.equal(progress.state.level, 1);
+    assert.equal(progress.canBuyCosmetic('skins', 'chrome'), true);
+    assert.equal(progress.canBuyCosmetic('backgrounds', 'arctic'), true);
+    const before = progress.state.coins;
     for (const item of SKINS.filter(item => item.price)) assert.equal(progress.buyCosmetic('skins', item.id), true);
     for (const item of BACKGROUNDS.filter(item => item.price)) assert.equal(progress.buyCosmetic('backgrounds', item.id), true);
+    assert.equal(before - progress.state.coins, 21_000);
     assert.equal(progress.buyCosmetic('skins', 'chrome'), false);
     assert.equal(progress.selectCosmetic('skins', 'chrome'), true);
+  } finally { progress.dispose(); }
+});
+
+test('a normal 300-level campaign funds all cosmetics after a 4000-coin booster budget', async () => {
+  const progress = new Progression(platform().vk, () => initialTime);
+  try {
+    await progress.init();
+    for (let level = 1; level <= 300; level++) {
+      progress.completeLevel(level, level % 2 ? 2 : 3);
+      if (level % 12 === 0) assert.equal(progress.buyBooster('remove'), true);
+    }
+    assert.equal(progress.state.coins, 21_100, '2.5 stars average, 350 starting coins, 25 remove boosts');
+    for (const item of SKINS.filter(item => item.price)) assert.equal(progress.buyCosmetic('skins', item.id), true);
+    for (const item of BACKGROUNDS.filter(item => item.price)) assert.equal(progress.buyCosmetic('backgrounds', item.id), true);
+    assert.equal(progress.state.coins, 100);
   } finally { progress.dispose(); }
 });
 
@@ -202,4 +217,20 @@ test('sanitization rejects invalid economy and checkpoint identity; all levels f
   const encoded = encodeProgress(resumed, true);
   assert.ok(new TextEncoder().encode(encoded).length < 4_000);
   assert.equal(sanitizeProgress(JSON.parse(encoded), initialTime).stars['600'], 3);
+});
+
+test('physical VK checkpoints preserve moving bodies and bindings within the cloud value limit',()=>{
+  const state=sanitizeProgress({stars:'3'.repeat(600),coins:5000,ownedSkins:SKINS.map(item=>item.id),ownedBackgrounds:BACKGROUNDS.map(item=>item.id)},initialTime);
+  for(let level=1;level<=600;level++){
+    const puzzle=new Puzzle(generateLevel(level),undefined,{physical:true});
+    const from=puzzle.holes.find(h=>puzzle.canSelect(h.id)&&puzzle.holes.some(to=>puzzle.canMove(h.id,to.id)))!;
+    const to=puzzle.holes.find(to=>puzzle.canMove(from.id,to.id))!;assert.ok(puzzle.move(from.id,to.id));
+    puzzle.syncPhysics(puzzle.livePlanks.map(p=>({id:p.id,x:p.x,y:p.y,angle:p.angle,vx:.1234,vy:-.2345,angularVelocity:.3456})));
+    state.checkpoint={level,daily:false,date:dailyDate(initialTime),snapshot:puzzle.snapshot(),seconds:12,boosterCount:0};
+    const encoded=encodeProgress(state,true),wire=JSON.parse(encoded);
+    assert.ok(new TextEncoder().encode(encoded).length<4000,`Physical level${level} fits VK storage`);
+    assert.ok(wire.checkpoint,`Level${level} must not silently discard the saved attempt`);
+    const restored=sanitizeProgress(wire,initialTime);
+    assert.deepEqual(restored.checkpoint?.snapshot,puzzle.snapshot(),`Physical level${level} cloud roundtrip`);
+  }
 });

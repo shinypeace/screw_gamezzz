@@ -41,6 +41,19 @@ for (let n = 1; n <= LEVEL_COUNT; n++) {
   }
   recentlySeenMotifs.push(level.motif);
   const puzzle = new Puzzle(level);
+  const physical = new Puzzle(level, undefined, { physical: true });
+  assert.ok(physical.holes.some(from => physical.holes.some(to => physical.canMove(from.id, to.id))),
+    `Level ${n}: thicker live beams leave at least one reachable opening move`);
+  assert.deepEqual(new Puzzle(level, physical.snapshot(), { physical: true }).snapshot(), physical.snapshot(),
+    `Level ${n}: material-hole bindings and initial rigid bodies persist`);
+  for (let drill = 0; drill < 3; drill++) {
+    const hole = physical.addExtraHole();
+    assert.ok(hole, `Level ${n}: all three drill boosters fit in clear board space`);
+    for (const other of physical.holes) if (other.id !== hole.id) {
+      assert.ok(Math.hypot(hole.x - other.x, (hole.y - other.y) * BOARD_ASPECT) * 300 >= 26,
+        `Level ${n}: extra drill must not overlap screw-head art`);
+    }
+  }
   const blocked = level.holes.filter(h => h.initialScrew && !puzzle.canSelect(h.id)).length;
   const minimumBlocked = n >= 300 ? 3 : n >= 150 ? 2 : n >= 10 ? 1 : 0;
   assert.ok(blocked >= minimumBlocked, `Level ${n}: release-order constraints must rise with campaign progress`);

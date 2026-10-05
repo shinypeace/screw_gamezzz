@@ -25,6 +25,14 @@ async function collect(directory, prefix = '') {
   return files;
 }
 
+// User music can be uploaded straight to the published root folder. Preserve
+// those two files on future builds, including the GitHub Actions artifact.
+for(const name of ['menu.mp3','game.mp3']){
+  const source=path.join(root,'assets','audio',name);
+  const destination=path.join(dist,'assets','audio',name);
+  try{await mkdir(path.dirname(destination),{recursive:true});await copyFile(source,destination)}
+  catch(error){if(error.code!=='ENOENT')throw error}
+}
 const assetFiles = (await collect(path.join(dist, 'assets'), 'assets')).sort();
 const exportFiles = ['index.html', '.nojekyll', ...assetFiles];
 let previousFiles = [];

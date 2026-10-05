@@ -1,35 +1,33 @@
 import './compat';
 import './style.css';
-import Matter from 'matter-js';
 import {Renderer,W,COLORS} from './render';
 import {AudioSystem} from './audio';
 import {platform} from './platform';
 import {progression,SKINS,BACKGROUNDS,BOOSTER_PRICES,LOGIN_REWARDS} from './progression';
 import {Puzzle,generateLevel,LEVEL_COUNT,BOARD_ASPECT} from './puzzle';
-import {samplePivotMotion} from './motion';
+import {BoardPhysics,DRILL_RADIUS} from './board-physics';
 
 type Screen='home'|'levels'|'daily'|'shop'|'collection'|'game';
 type Modal='settings'|'login'|'hearts'|'pause'|'win'|'restart'|'help'|'booster'|null;
 type Pose={id:number;x:number;y:number;length:number;width:number;angle:number;skin:number;layer:number;pivotHole?:number|null;angularVelocity?:number;vx?:number;vy?:number};
 type Particle={x:number;y:number;vx:number;vy:number;life:number;max:number;size:number;color:string;angle:number};
-type Falling={body:Matter.Body;pose:Pose;life:number};
 const r=new Renderer(document.querySelector<HTMLCanvasElement>('#canvas')!);
 const audio=new AudioSystem();
-const physics=Matter.Engine.create({gravity:{x:0,y:1.4}});
+let physics:BoardPhysics|null=null;
+const plankTextures=new Map<string,HTMLCanvasElement>();
 let screen:Screen='home',modal:Modal=null,collectionTab:'skins'|'backgrounds'='skins',levelPage=0;
 let puzzle:Puzzle|null=null,gameLevel=1,isDaily=false,elapsed=0,boosterCount=0,removeMode=false;
 let selectedBooster:'undo'|'remove'|'shuffle'='undo',last=performance.now(),clock=0,winStars=3,rewardTaken=false,winCoins=0,winProcessed=false;
-let particles:Particle[]=[],falling:Falling[]=[],toast='',toastUntil=0,transition=0,ready=false,adPending=false;
+let particles:Particle[]=[],toast='',toastUntil=0,transition=0,ready=false,adPending=false;
 let hintPair:{from:number;to:number}|null=null,hintUntil=0;
 let attemptDate='',a11yKey='';
 let screwFlight:{from:{x:number;y:number};to:{x:number;y:number};hole:number;start:number;removing:boolean}|null=null;
-const tweens=new Map<number,{before:Pose;after:Pose;start:number}>();
 const board={x:27,y:230,w:336,h:403.2};
 const state=()=>progression.state;
 const fmt=(n:number)=>n.toLocaleString('ru-RU');
 const showToast=(text:string)=>{toast=text;toastUntil=clock+3.2};
 const openModal=(m:Modal)=>{modal=m;audio.play('tap')};
-const setScreen=(s:Screen)=>{screen=s;modal=null;transition=clock;removeMode=false;if(s==='game')void platform.hideBanner();else void platform.showBanner()};
+const setScreen=(s:Screen)=>{screen=s;modal=null;transition=clock;removeMode=false;audio.setScene(s==='game'?'game':'menu');void platform.showBanner()};
 const daySeed=()=>Number(state().daily.date.replace(/-/g,''));
 function scatter(x:number,y:number,count=20,confetti=false){
   const colors=['#f5c373','#e6f5e0','#4ec4ac','#d7765c'];
@@ -38,46 +36,33 @@ function scatter(x:number,y:number,count=20,confetti=false){
 function saveGame(){if(puzzle&&!puzzle.solved)progression.saveCheckpoint({level:gameLevel,daily:isDaily,date:attemptDate,snapshot:puzzle.snapshot(),seconds:Math.round(elapsed),boosterCount});}
 function startGame(level:number,daily=false,resume=false){
   if(!resume&&!progression.spendHeart()){openModal('hearts');return;}
-  gameLevel=level;isDaily=daily;elapsed=0;boosterCount=0;rewardTaken=false;winProcessed=false;removeMode=false;screwFlight=null;falling=[];Matter.Composite.clear(physics.world,false);tweens.clear();hintPair=null;
-  attemptDate=state().daily.date;puzzle=new Puzzle(generateLevel(level,daily?daySeed():undefined));
+  gameLevel=level;isDaily=daily;elapsed=0;boosterCount=0;rewardTaken=false;winProcessed=false;removeMode=false;screwFlight=null;hintPair=null;plankTextures.clear();
+  attemptDate=state().daily.date;puzzle=new Puzzle(generateLevel(level,daily?daySeed():undefined),undefined,{physical:true});
   if(resume&&state().checkpoint){const cp=state().checkpoint!;if(!puzzle.restore(cp.snapshot as ReturnType<Puzzle['snapshot']>)){progression.clearCheckpoint();showToast('Начинаем новый чертёж');}else{elapsed=cp.seconds;boosterCount=cp.boosterCount;}}
   if(level===1&&!state().tutorialDone){hintPair=puzzle.level.witness[0];hintUntil=clock+25;}
-  setScreen('game');saveGame();audio.play('tap');
+  physics=new BoardPhysics(puzzle.level,puzzle);setScreen('game');saveGame();audio.play('tap');
 }
 function resumeGame(){const cp=state().checkpoint;if(cp&&(!cp.daily||cp.date===state().daily.date))startGame(cp.level,cp.daily,true);else startGame(Math.min(state().level,LEVEL_COUNT));}
-function visiblePose(raw:Pose):Pose{
-  const tween=tweens.get(raw.id);if(!tween)return raw;
-  const anchor=tween.after.pivotHole==null?undefined:puzzle!.holes[tween.after.pivotHole];
-  const motion=samplePivotMotion(tween.before,tween.after,anchor,clock-tween.start,BOARD_ASPECT);
-  if(motion.settled)tweens.delete(raw.id);
-  return {...raw,...motion};
-}
-function animateMove(result:NonNullable<ReturnType<Puzzle['move']>>,poses:Pose[]){
+function animateMove(result:NonNullable<ReturnType<Puzzle['move']>>){
   audio.play('screw');if(state().settings.haptic)platform.haptic();
   const h=puzzle!.holes[result.to>=0?result.to:result.from];scatter(board.x+h.x*board.w,board.y+h.y*board.h,12);
   const source=puzzle!.holes[result.from];
   screwFlight={from:{x:source.x,y:source.y},to:result.to>=0?{x:h.x,y:h.y}:{x:source.x,y:source.y-.24},hole:result.to,start:clock,removing:result.to<0};
-  for(const pivot of result.pivots)tweens.set(pivot.id,{before:poses.find(p=>p.id===pivot.id)??pivot.before as Pose,after:pivot.after as Pose,start:clock});
-  for(const id of result.dropped){const pose=poses.find(x=>x.id===id);if(!pose)continue;
-    tweens.delete(id);
-    const body=Matter.Bodies.rectangle(board.x+pose.x*board.w,board.y+pose.y*board.h,pose.length*board.w,pose.width*board.w,{angle:pose.angle,frictionAir:.018,restitution:.2});
-    Matter.Body.setAngularVelocity(body,(pose.angularVelocity??0)/60);Matter.Body.setVelocity(body,{x:(pose.vx??0)*board.w/60,y:(pose.vy??0)*board.h/60});Matter.Composite.add(physics.world,body);falling.push({body,pose,life:2.4});audio.play('drop');}
-  hintPair=null;saveGame();if(puzzle!.solved)win();
+  physics?.syncPuzzle(puzzle!);hintPair=null;saveGame();
 }
 function holeTap(id:number){
   if(!puzzle||puzzle.solved||modal||adPending||screwFlight)return;
-  const poses=(puzzle.livePlanks as Pose[]).map(visiblePose);
   if(removeMode){
     if(!puzzle.screws[id]){showToast('Выберите винт, который хотите убрать');return;}
     const result=puzzle.removeScrew(id);
     if(!result){showToastToast();return;}
     progression.useBooster('remove');boosterCount++;removeMode=false;
-    animateMove(result,poses);return;
+    animateMove(result);return;
   }
   if(puzzle.screws[id]){if(puzzle.select(id))audio.play('tap');else showToastToast();return;}
   if(puzzle.selected===null){showToast('Сначала выберите винт');return;}
   const result=puzzle.move(puzzle.selected,id);
-  if(result)animateMove(result,poses);else{audio.play('error');showToast('Отверстие закрыто деревянной деталью');}
+  if(result)animateMove(result);else{audio.play('error');showToast('Совместите отверстия или выберите открытое место');}
 }
 function showToastToast(){audio.play('error');showToast('Этот винт закрыт другой деталью');}
 function win(){
@@ -101,16 +86,16 @@ function booster(type:'undo'|'remove'|'shuffle'){
   if(state().boosters[type]<=0){openModal('booster');return;}
   if(type==='undo'){
     if(!puzzle.undo()){showToast('Пока нет ходов для отмены');return;}
-    progression.useBooster(type);boosterCount++;tweens.clear();screwFlight=null;falling=[];Matter.Composite.clear(physics.world,false);saveGame();audio.play('tap');
+    progression.useBooster(type);boosterCount++;screwFlight=null;physics?.reset(puzzle.level,puzzle);saveGame();audio.play('tap');
   }else if(type==='remove'){removeMode=!removeMode;showToast(removeMode?'Нажмите на винт, чтобы убрать его':'Снятие винта отменено');}
-  else{if(!puzzle.addExtraHole()){showToast('Дополнительное отверстие уже открыто');return;}progression.useBooster(type);boosterCount++;saveGame();showToast('Открыто дополнительное отверстие');}
+  else{if(!puzzle.addExtraHole()){showToast('Дополнительное отверстие уже открыто');return;}progression.useBooster(type);boosterCount++;physics?.syncPuzzle(puzzle);saveGame();showToast('Открыто дополнительное отверстие');}
 }
 function hint(){
   if(!puzzle||puzzle.solved||adPending||screwFlight)return;
   if(state().boosters.hint<=0){void rewarded({booster:'hint'},()=>{showToast('Подсказка получена');hint()});return;}
   const h=puzzle.hint();
   if(h){progression.useBooster('hint');boosterCount++;hintPair=h;hintUntil=clock+12;audio.play('tap');saveGame();showToast('Перенесите подсвеченный винт в отверстие');}
-  else showToast('Попробуйте отменить ход или открыть отверстие');
+  else showToast('Дождитесь движения деталей или попробуйте отменить ход');
 }
 function header(title?:string,back=false){
   const top=16;
@@ -131,7 +116,23 @@ function drawPlank(pose:Pose,alpha=1){
   const c=r.c;c.save();c.globalAlpha*=alpha;c.translate(board.x+pose.x*board.w,board.y+pose.y*board.h);c.rotate(pose.angle);
   const l=pose.length*board.w,w=pose.width*board.w;
   c.shadowColor='rgba(25,15,12,.35)';c.shadowBlur=6;c.shadowOffsetY=4;
-  r.image(r.images.has(`skins/${state().skin}-plank.png`)?`skins/${state().skin}-plank.png`:'plank.png',-l/2,-w/2,l,w);c.shadowBlur=0;c.shadowOffsetY=0;
+  const asset=r.images.has(`skins/${state().skin}-plank.png`)?`skins/${state().skin}-plank.png`:'plank.png';
+  const key=`${gameLevel}:${pose.id}:${asset}:${Math.round(l*2)}:${Math.round(w*2)}`;
+  let texture=plankTextures.get(key);
+  if(!texture){
+    texture=document.createElement('canvas');texture.width=Math.ceil(l*2);texture.height=Math.ceil(w*2);
+    const paint=texture.getContext('2d')!;paint.scale(2,2);
+    const image=r.images.get(asset);if(image)paint.drawImage(image,0,0,l,w);
+    for(const drill of puzzle!.getDrillPoints(pose.id)){
+      const xx=l/2+drill.x*board.w,yy=w/2+drill.y*board.w,radius=DRILL_RADIUS*board.w;
+      const bevel=paint.createRadialGradient(xx,yy,radius*.82,xx,yy,radius+1.7);
+      bevel.addColorStop(0,'#392313');bevel.addColorStop(.56,'#623619');bevel.addColorStop(1,'rgba(239,186,109,.7)');
+      paint.fillStyle=bevel;paint.beginPath();paint.arc(xx,yy,radius+1.7,0,Math.PI*2);paint.fill();
+      paint.globalCompositeOperation='destination-out';paint.beginPath();paint.arc(xx,yy,radius,0,Math.PI*2);paint.fill();paint.globalCompositeOperation='source-over';
+    }
+    if(plankTextures.size>100)plankTextures.clear();plankTextures.set(key,texture);
+  }
+  c.drawImage(texture,-l/2,-w/2,l,w);c.shadowBlur=0;c.shadowOffsetY=0;
   c.restore();
 }
 function screwAt(x:number,y:number,selected=false,scale=1){
@@ -223,14 +224,13 @@ function collection(){
     if(!owned){const mysteryH=Math.min(58,cellH-78),mysteryW=mysteryH*1.284;r.image('mystery.png',x+(cellW-mysteryW)/2,y+16,mysteryW,mysteryH);}
     else if(collectionTab==='skins'){r.image(`skins/${item.id}-screw.png`,x+(cellW-artSize)/2,y+16,artSize,artSize);}
     else r.cover(`backgrounds/${item.id}.webp`,x+21,y+16,126,cellH-89);
-    const unlocked=state().level>item.unlockLevel;
     r.text(owned?item.name:'Тайный подарок',x+84,y+cellH-58,12,COLORS.ink,800,'center',130);
-    r.button('cosmetic-'+item.id,active?'Выбрано':owned?'Выбрать':unlocked?String(item.price):`Ур. ${item.unlockLevel}`,x+20,y+cellH-42,128,29,()=>{
+    r.button('cosmetic-'+item.id,active?'Выбрано':owned?'Выбрать':String(item.price),x+20,y+cellH-42,128,29,()=>{
       const type=collectionTab==='skins'?'skin':'background';
       if(owned){progression.selectCosmetic(type,item.id);audio.play('tap');}
       else if(progression.buyCosmetic(type,item.id)){audio.play('reward');showToast('Новый предмет в коллекции');}
       else showToast('Недостаточно монет');
-    },{kind:active?'primary':'secondary',icon:owned?'check':unlocked?'coin':'lock',disabled:!owned&&!unlocked,small:true});
+    },{kind:active?'primary':'secondary',icon:owned?'check':'coin',small:true});
   });nav();
 }
 function gameplay(){
@@ -248,14 +248,18 @@ function gameplay(){
     const x=board.x+hole.x*board.w,y=board.y+hole.y*board.h;
     c.fillStyle='#573b26';c.beginPath();c.arc(x,y,10.5,0,Math.PI*2);c.fill();c.fillStyle='#ad8956';c.beginPath();c.arc(x,y+2,7.7,0,Math.PI*2);c.fill();c.fillStyle='#392b22';c.beginPath();c.arc(x,y+1,6.5,0,Math.PI*2);c.fill();
   }
-  for(const raw of puzzle.livePlanks as Pose[])drawPlank(visiblePose(raw));
+  c.save();c.beginPath();c.rect(board.x-13,board.y-13,board.w+26,board.h+31);c.clip();
+  for(const raw of puzzle.livePlanks as Pose[])drawPlank(raw);
+  c.restore();
   for(const hole of puzzle.holes){const x=board.x+hole.x*board.w,y=board.y+hole.y*board.h;
     const reachable=puzzle.canSelect(hole.id);
     if(puzzle.screws[hole.id]&&reachable&&screwFlight?.hole!==hole.id)screwAt(x,y,puzzle.selected===hole.id||removeMode||!!(hintPair&&hintPair.from===hole.id&&clock<hintUntil));
+    if(!puzzle.screws[hole.id]&&puzzle.selected!==null&&puzzle.canMove(puzzle.selected,hole.id)){
+      c.strokeStyle='rgba(114,222,179,.75)';c.lineWidth=2;c.beginPath();c.arc(x,y,11.7,0,Math.PI*2);c.stroke();
+    }
     if(hintPair&&hintPair.to===hole.id&&clock<hintUntil){c.strokeStyle='#79dfb6';c.lineWidth=3;c.beginPath();c.arc(x,y,14+Math.sin(clock*6)*2,0,Math.PI*2);c.stroke();}
     if(!puzzle.screws[hole.id]||reachable)r.hits.push({id:'hole-'+hole.id,label:`Отверстие ${hole.id+1}`,x:x-17,y:y-17,w:34,h:34,fn:()=>holeTap(hole.id)});
   }
-  for(const item of falling){c.save();c.translate(item.body.position.x,item.body.position.y);c.rotate(item.body.angle);c.globalAlpha=Math.min(1,item.life);const asset=`skins/${state().skin}-plank.png`;r.image(r.images.has(asset)?asset:'plank.png',-item.pose.length*board.w/2,-item.pose.width*board.w/2,item.pose.length*board.w,item.pose.width*board.w);c.restore();}
   if(screwFlight){const flight=screwFlight,t=Math.min(1,(clock-flight.start)/.46),e=t*t*(3-2*t);
     const fx=board.x+(flight.from.x+(flight.to.x-flight.from.x)*e)*board.w,fy=board.y+(flight.from.y+(flight.to.y-flight.from.y)*e)*board.h-Math.sin(t*Math.PI)*35;
     c.save();c.translate(fx,fy);c.rotate(t*Math.PI*4);c.globalAlpha=flight.removing?1-t:1;const size=26+Math.sin(t*Math.PI)*9,asset=`skins/${state().skin}-screw.png`;r.image(r.images.has(asset)?asset:'screw.png',-size/2,-size/2,size,size);c.restore();
@@ -319,8 +323,8 @@ function dialog(){
   }
   if(modal==='help'){
     r.icon('screw',W/2-28,y+76,56);
-    r.wrap('Нажмите на винт, затем на свободное отверстие. Отверстия под деревянными деталями закрыты.',W/2,y+161,280,15,COLORS.ink,23);
-    r.wrap('Один винт держит деталь на весу. Уберите последний — и она упадёт. Освободите все детали, чтобы победить.',W/2,y+252,280,14,COLORS.ink,22);
+    r.wrap('Нажмите на болт и выберите отверстие. Если отверстие в балке совпало с отверстием в доске, болт снова закрепит её.',W/2,y+157,280,14,COLORS.ink,21);
+    r.wrap('Балки качаются на креплениях и могут опираться на другие болты. Уберите опоры и дайте всем деталям упасть.',W/2,y+259,280,14,COLORS.ink,21);
     r.button('help-ok','Понятно, играем',49,y+h-67,292,46,()=>{modal=null},{kind:'primary'});
   }
   if(modal==='booster'){
@@ -345,10 +349,16 @@ function syncAudio(){audio.sound=state().settings.sound;audio.music=state().sett
 function draw(now:number){
   const wallDt=Math.max(0,(now-last)/1000),simulationPaused=platform.paused||document.hidden||adPending||(screen==='game'&&modal!==null);
   const dt=simulationPaused?0:Math.min(.04,wallDt);last=now;clock+=dt;
+  audio.paused=simulationPaused;
   if(ready){
     if(screen==='game'&&!modal&&!platform.paused&&!document.hidden&&!adPending&&puzzle&&!puzzle.solved)elapsed+=wallDt;
-    if(dt>0)Matter.Engine.update(physics,dt*1000);
-    falling=falling.filter(item=>{item.life-=dt;if(item.life<=0){Matter.Composite.remove(physics.world,item.body);return false;}return true;});
+    if(screen==='game'&&physics&&puzzle&&dt>0&&!puzzle.solved){
+      physics.syncPuzzle(puzzle);physics.step(dt);
+      const removed=puzzle.removed.filter(Boolean).length;
+      puzzle.syncPhysics(physics.getPoses(),physics.getFallenIds(),physics.getContacts());
+      if(puzzle.removed.filter(Boolean).length>removed)audio.play('drop');
+      if(puzzle.solved)win();
+    }
     r.hits=[];r.background(state().background,screen==='game'?.06:.21);
     ({home,levels,daily,shop,collection,game:gameplay}[screen])();
     dialog();

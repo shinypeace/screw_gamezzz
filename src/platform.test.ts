@@ -70,7 +70,7 @@ test('VK hide during an ad keeps sound and gameplay paused until restore', async
   } finally { platform.dispose(); }
 });
 
-test('a pending banner cannot reappear after gameplay hides it', async () => {
+test('an explicitly hidden pending banner cannot reappear after its request finishes', async () => {
   let finish!: (result: unknown) => void;
   const mock = bridge(method => method === 'VKWebAppShowBannerAd'
     ? new Promise(resolve => { finish = resolve; }) : { result: true });

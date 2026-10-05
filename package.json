@@ -9,7 +9,7 @@
     "preview": "vite preview --host 0.0.0.0",
     "build:levels": "tsx scripts/build-level-catalog.ts",
     "validate:levels": "tsx scripts/validate-levels.ts",
-    "test": "tsx --test src/platform.test.ts src/progression.test.ts src/motion.test.ts src/puzzle-runtime.test.ts"
+    "test": "tsx --test src/platform.test.ts src/progression.test.ts src/audio.test.ts src/board-physics.test.ts src/puzzle-runtime.test.ts"
   },
   "dependencies": {
     "@vkontakte/vk-bridge": "^2.15.11",

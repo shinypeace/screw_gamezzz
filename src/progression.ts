@@ -9,19 +9,19 @@ export type CosmeticType = 'skin' | 'background' | 'skins' | 'backgrounds';
 export type Setting = 'sound' | 'music' | 'haptic';
 export const BOOSTER_PRICES: Record<BoosterType, number> = { undo: 80, remove: 160, shuffle: 120, hint: 100 };
 export const SKINS = [
-  { id: 'classic', name: 'Классика', description: 'Яркие эмалевые винты', price: 0, unlockLevel: 1, color: '#41bfdd' },
-  { id: 'chrome', name: 'Хром', description: 'Холодный блеск металла', price: 1_200, unlockLevel: 20, color: '#a9d4ed' },
-  { id: 'gold', name: 'Золото', description: 'Тёплое сияние победы', price: 2_400, unlockLevel: 50, color: '#ffd05b' },
-  { id: 'aurora', name: 'Аврора', description: 'Перламутр северного света', price: 3_200, unlockLevel: 90, color: '#74efcb' },
-  { id: 'neon', name: 'Неон', description: 'Энергия ночного города', price: 4_200, unlockLevel: 200, color: '#c18aff' },
-  { id: 'candy', name: 'Конфетти', description: 'Сладкие цвета мастерской', price: 2_000, unlockLevel: 140, color: '#ff8fb3' },
+  { id: 'classic', name: 'Классика', description: 'Яркие эмалевые винты', price: 0, color: '#41bfdd' },
+  { id: 'chrome', name: 'Хром', description: 'Холодный блеск металла', price: 1_200, color: '#a9d4ed' },
+  { id: 'gold', name: 'Золото', description: 'Тёплое сияние победы', price: 1_700, color: '#ffd05b' },
+  { id: 'aurora', name: 'Аврора', description: 'Перламутр северного света', price: 1_300, color: '#74efcb' },
+  { id: 'neon', name: 'Неон', description: 'Энергия ночного города', price: 3_100, color: '#c18aff' },
+  { id: 'candy', name: 'Конфетти', description: 'Сладкие цвета мастерской', price: 3_400, color: '#ff8fb3' },
 ] as const;
 export const BACKGROUNDS = [
-  { id: 'workshop', name: 'Мастерская', description: 'Тёплый свет и дерево', price: 0, unlockLevel: 1, color: '#315768' },
-  { id: 'midnight', name: 'Полночь', description: 'Лунный свет и глубокий индиго', price: 1_500, unlockLevel: 35, color: '#26364e' },
-  { id: 'forest', name: 'Лес', description: 'Изумрудная тишина', price: 1_800, unlockLevel: 80, color: '#285d47' },
-  { id: 'sunset', name: 'Закат', description: 'Медовое вечернее небо', price: 2_200, unlockLevel: 160, color: '#815846' },
-  { id: 'arctic', name: 'Арктика', description: 'Чистый свет и ледяная свежесть', price: 2_500, unlockLevel: 300, color: '#3f7686' },
+  { id: 'workshop', name: 'Мастерская', description: 'Тёплый свет и дерево', price: 0, color: '#315768' },
+  { id: 'midnight', name: 'Полночь', description: 'Лунный свет и глубокий индиго', price: 1_400, color: '#26364e' },
+  { id: 'forest', name: 'Лес', description: 'Изумрудная тишина', price: 2_100, color: '#285d47' },
+  { id: 'sunset', name: 'Закат', description: 'Медовое вечернее небо', price: 1_500, color: '#815846' },
+  { id: 'arctic', name: 'Арктика', description: 'Чистый свет и ледяная свежесть', price: 5_300, color: '#3f7686' },
 ] as const;
 export const LOGIN_REWARDS = [
   { coins: 60 }, { coins: 80 }, { coins: 100, booster: 'undo' },
@@ -140,7 +140,7 @@ function sanitizeCheckpoint(value: unknown, state: ProgressState, now: number): 
   const level = Number(checkpoint.level), daily = checkpoint.daily === true, date = validDate(checkpoint.date);
   if (!Number.isInteger(level) || level < 1 || level > CAMPAIGN_LEVELS || (!daily && level > state.level) || (daily && date !== dailyDate(now))) return null;
   const screws = boolArray(raw.screws), released = boolArray(raw.released), removed = boolArray(raw.removed);
-  if (!screws || !released || !removed || raw.version !== 1 || raw.levelId !== level || !Number.isInteger(raw.seed) || Number(raw.seed) < 0 || Number(raw.seed) > 4_294_967_295 || !Number.isInteger(raw.moves) || Number(raw.moves) < 0 || Number(raw.moves) > 100_000) return null;
+  if (!screws || !released || !removed || (raw.version !== 1 && raw.version !== 2) || raw.levelId !== level || !Number.isInteger(raw.seed) || Number(raw.seed) < 0 || Number(raw.seed) > 4_294_967_295 || !Number.isInteger(raw.moves) || Number(raw.moves) < 0 || Number(raw.moves) > 100_000) return null;
   try {
     // A different catalogue must never reinterpret saved screw bitsets as a
     // random daily board. Keep earned currency/stars and discard only that attempt.
@@ -164,8 +164,11 @@ function sanitizeCheckpoint(value: unknown, state: ProgressState, now: number): 
       if (holes.some(hole => !Number.isFinite(hole.x) || !Number.isFinite(hole.y) || hole.x < 0 || hole.x > 1 || hole.y < 0 || hole.y > 1)) return null;
       if (generated.holes.some((h, i) => holes[i]?.id !== h.id || holes[i]?.x !== h.x || holes[i]?.y !== h.y || holes[i]?.initialScrew !== h.initialScrew)) return null;
     }
-    const snapshot: PuzzleSnapshot = { version: 1, levelId: generated.id, seed: generated.seed, screws, released, removed, moves: Number(raw.moves), holes };
-    const puzzle = new Puzzle(generated);
+    const base={levelId:generated.id,seed:generated.seed,screws,released,removed,moves:Number(raw.moves),holes};
+    const snapshot: PuzzleSnapshot = raw.version===2
+      ? {...base,version:2,bindings:raw.bindings as number[][],bodies:raw.bodies as number[][]}
+      : {...base,version:1};
+    const puzzle = new Puzzle(generated,undefined,{physical:raw.version===2});
     if (!puzzle.restore(snapshot) || puzzle.solved) return null;
     return { level, daily, date, snapshot, seconds: integer(checkpoint.seconds, 0, 0, 86_400), boosterCount: integer(checkpoint.boosterCount, 0, 0, 999) };
   } catch { return null; }
@@ -174,11 +177,12 @@ function compactCheckpoint(checkpoint: GameCheckpoint | null): unknown {
   if (!checkpoint) return null;
   const snapshot = checkpoint.snapshot;
   return { ...checkpoint, snapshot: {
-    version: 1, compact: 1, levelId: snapshot.levelId, seed: snapshot.seed, moves: snapshot.moves,
+    version: snapshot.version, compact: 1, levelId: snapshot.levelId, seed: snapshot.seed, moves: snapshot.moves,
     screws: snapshot.screws.map(bit => bit ? '1' : '0').join(''),
     released: snapshot.released.map(bit => bit ? '1' : '0').join(''),
     removed: snapshot.removed.map(bit => bit ? '1' : '0').join(''),
     extra: snapshot.holes.filter(hole => hole.extra).map(hole => [hole.x, hole.y]),
+    ...(snapshot.version===2?{bindings:snapshot.bindings,bodies:snapshot.bodies}:{}),
   } };
 }
 function decode(text: string | null, now: number): ProgressState | null {
@@ -367,7 +371,7 @@ export class Progression {
     const isSkin = type === 'skin' || type === 'skins';
     const item = (isSkin ? SKINS : BACKGROUNDS).find(entry => entry.id === id);
     const owned = isSkin ? this.state.ownedSkins : this.state.ownedBackgrounds;
-    return Boolean(item && !owned.includes(id) && this.state.level > item.unlockLevel && this.state.coins >= item.price);
+    return Boolean(item && !owned.includes(id) && this.state.coins >= item.price);
   }
   buyCosmetic(type: CosmeticType, id: string): boolean {
     if (!['skin', 'skins', 'background', 'backgrounds'].includes(type)) return false;
