@@ -21,6 +21,9 @@ export interface PhysicalPlankState { id: number; x: number; y: number; angle: n
 export interface PhysicalBoltContact { plank: number; hole: number }
 export const PHYSICAL_PLANK_WIDTH_SCALE = 1.1;
 export const DRILL_ALIGNMENT = .0055;
+// Match the real metal shaft, including a small solver clearance. An empty
+// board-hole centre outside wood is insufficient if its shaft overlaps an edge.
+const SHAFT_INSERTION_CLEARANCE = .013;
 export interface Move { from: number; to: number }
 export interface Level {
   id: number; seed: number; name: string; difficulty: number; holes: Hole[];
@@ -151,7 +154,7 @@ export class Puzzle {
     return nearest && nearest.distance <= tolerance ? nearest.material : null;
   }
   private physicalHoleOpen(hole: number): boolean {
-    return Boolean(this.holes[hole]) && this.livePlanks.every(p => !plankContains(p, this.holes[hole], .006) ||
+    return Boolean(this.holes[hole]) && this.livePlanks.every(p => !plankContains(p, this.holes[hole], SHAFT_INSERTION_CLEARANCE) ||
       this.alignedMaterial(p.id, hole) !== null);
   }
   private refreshReleased(): void { this.released = this.holes.map(h => !this.isAttached(h.id)); }
@@ -501,11 +504,46 @@ const adaptedCampaign = new Map<number, Level>();
 // need extra ordinary parking space after real shaft contacts replace the old
 // instantaneous strip removal. Other boards retain their original challenge.
 const RECOVERY_PARKING: Record<number, number> = {
-  10: 1, 30: 2, 65: 3, 79: 2, 87: 2, 153: 2, 191: 2, 196: 2, 197: 2,
-  225: 2, 240: 2, 259: 2, 280: 2, 281: 2, 298: 2, 322: 2, 336: 2,
-  354: 2, 378: 2, 381: 2, 391: 2, 392: 2, 399: 2, 401: 2, 411: 2,
-  415: 2, 424: 2, 435: 2, 437: 2, 439: 2, 451: 2, 461: 2, 474: 2,
-  512: 2, 521: 2, 527: 2, 530: 2, 538: 2, 550: 2, 558: 2, 579: 2, 588: 2, 594: 2,
+  9: 1, 10: 1, 15: 1, 18: 2, 19: 1, 24: 2, 25: 1, 27: 1,
+  30: 2, 32: 1, 33: 3, 40: 1, 41: 2, 43: 3, 44: 1, 45: 1,
+  46: 2, 47: 3, 48: 1, 51: 4, 55: 3, 59: 2, 60: 3, 61: 1,
+  65: 3, 66: 1, 67: 1, 68: 2, 69: 1, 70: 2, 71: 1, 73: 1,
+  75: 1, 79: 3, 84: 1, 86: 3, 87: 2, 92: 1, 93: 1, 95: 1,
+  97: 1, 98: 4, 100: 1, 101: 1, 102: 1, 106: 2, 108: 1, 109: 2,
+  120: 1, 126: 1, 130: 1, 132: 1, 133: 1, 134: 1, 135: 1, 136: 1,
+  139: 1, 140: 1, 142: 2, 145: 2, 147: 1, 148: 1, 149: 1, 150: 2,
+  152: 2, 153: 2, 158: 1, 165: 3, 166: 1, 167: 1, 171: 1, 173: 1,
+  177: 1, 178: 2, 180: 1, 181: 1, 182: 1, 184: 2, 188: 1, 189: 3,
+  190: 1, 191: 2, 193: 2, 196: 2, 197: 2, 201: 1, 202: 1, 205: 3,
+  206: 3, 207: 2, 208: 2, 212: 1, 213: 1, 214: 1, 215: 1, 225: 5,
+  227: 1, 232: 1, 233: 1, 235: 1, 237: 2, 239: 1, 240: 2, 243: 2,
+  244: 2, 245: 2, 246: 1, 247: 2, 248: 2, 249: 2, 250: 1, 252: 3,
+  253: 1, 255: 3, 256: 1, 257: 2, 259: 2, 260: 2, 264: 1, 266: 1,
+  267: 2, 270: 1, 271: 4, 273: 1, 275: 1, 279: 2, 280: 2, 281: 2,
+  282: 1, 283: 2, 286: 1, 292: 1, 293: 2, 296: 1, 297: 2, 298: 2,
+  300: 3, 302: 1, 303: 3, 307: 1, 314: 1, 317: 2, 318: 1, 322: 2,
+  324: 4, 327: 1, 330: 1, 336: 2, 339: 2, 340: 2, 342: 1, 343: 1,
+  344: 1, 345: 1, 346: 1, 347: 1, 352: 3, 353: 1, 354: 4, 356: 1,
+  357: 1, 358: 1, 359: 2, 366: 1, 367: 3, 371: 1, 373: 1, 374: 1,
+  376: 2, 378: 2, 381: 2, 386: 2, 388: 2, 390: 3, 391: 3, 392: 2,
+  394: 1, 395: 1, 396: 1, 397: 2, 399: 2, 401: 4, 402: 3, 403: 1,
+  405: 2, 406: 2, 409: 1, 411: 2, 413: 2, 414: 1, 415: 2, 420: 2,
+  421: 1, 424: 3, 427: 3, 430: 3, 434: 1, 435: 4, 436: 2, 437: 2,
+  439: 3, 440: 2, 441: 1, 442: 3, 443: 3, 449: 2, 451: 2, 452: 1,
+  453: 2, 455: 1, 456: 2, 459: 2, 461: 2, 462: 1, 463: 3, 464: 1,
+  466: 1, 467: 1, 468: 1, 469: 1, 471: 1, 472: 1, 474: 3, 475: 1,
+  479: 2, 481: 1, 482: 1, 483: 2, 484: 2, 485: 1, 486: 1, 488: 2,
+  490: 3, 491: 2, 492: 3, 493: 2, 494: 2, 495: 2, 496: 1, 497: 2,
+  498: 1, 500: 1, 502: 1, 503: 1, 505: 1, 506: 1, 508: 1, 509: 3,
+  510: 1, 512: 2, 513: 1, 515: 1, 516: 1, 520: 1, 521: 2, 522: 1,
+  526: 1, 527: 2, 528: 1, 529: 2, 530: 2, 531: 2, 532: 2, 533: 1,
+  534: 1, 535: 1, 536: 1, 537: 2, 538: 2, 539: 1, 542: 1, 543: 2,
+  544: 1, 545: 2, 548: 1, 549: 1, 550: 2, 552: 2, 554: 1, 556: 1,
+  557: 1, 558: 2, 559: 1, 563: 1, 565: 1, 566: 2, 568: 1, 569: 2,
+  570: 1, 571: 1, 572: 3, 575: 1, 576: 1, 577: 1, 578: 1, 579: 3,
+  581: 1, 582: 3, 583: 1, 584: 1, 585: 1, 587: 1, 588: 2, 589: 1,
+  590: 2, 591: 1, 592: 1, 593: 2, 594: 2, 595: 2, 596: 2, 597: 1,
+  598: 2,
 };
 /** Dense multi-pin strips need a third board parking position now that a bolt
  * returned through real wood holes catches the strip again. The added hole is
@@ -538,8 +576,15 @@ export function generateLevel(index: number, seedOverride?: number): Level {
   return adaptPhysicalParking({ ...selected, id: index, seed }, false, selected.id);
 }
 
-export function generateDailyLevel(date: string): Level {
+/** Version daily physical geometry as well as its date. Old dated snapshots
+ * must not apply bindings from the previous catalogue to a new architecture. */
+export function dailyPuzzleSeed(date: string): number {
   let seed = 2166136261;
-  for (const char of date) seed = Math.imul(seed ^ char.charCodeAt(0), 16777619);
+  for (const char of `${date}:catalogue-v3`) seed = Math.imul(seed ^ char.charCodeAt(0), 16777619);
+  return seed >>> 0;
+}
+
+export function generateDailyLevel(date: string): Level {
+  const seed = dailyPuzzleSeed(date);
   return generateLevel(180 + ((seed >>> 0) % 421), seed >>> 0);
 }

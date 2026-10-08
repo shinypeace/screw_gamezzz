@@ -4,8 +4,9 @@ import {Renderer,W,COLORS} from './render';
 import {AudioSystem} from './audio';
 import {platform} from './platform';
 import {progression,SKINS,BACKGROUNDS,BOOSTER_PRICES,LOGIN_REWARDS} from './progression';
-import {Puzzle,generateLevel,LEVEL_COUNT,BOARD_ASPECT} from './puzzle';
+import {Puzzle,generateLevel,dailyPuzzleSeed,LEVEL_COUNT,BOARD_ASPECT} from './puzzle';
 import {BoardPhysics,DRILL_RADIUS} from './board-physics';
+import {drawBeamBitmap} from './plank-texture';
 
 type Screen='home'|'levels'|'daily'|'shop'|'collection'|'game';
 type Modal='settings'|'login'|'hearts'|'pause'|'win'|'restart'|'help'|'booster'|null;
@@ -15,7 +16,8 @@ const r=new Renderer(document.querySelector<HTMLCanvasElement>('#canvas')!);
 const audio=new AudioSystem();
 let physics:BoardPhysics|null=null;
 const plankTextures=new Map<string,HTMLCanvasElement>();
-let screen:Screen='home',modal:Modal=null,collectionTab:'skins'|'backgrounds'='skins',levelPage=0;
+let screen:Screen='home',modal:Modal=null,collectionTab:'skins'|'backgrounds'='skins',levelPage=0,levelPageSize=25;
+let collectionPage=0,dailyTaskPage=0,shopPage=0;
 let puzzle:Puzzle|null=null,gameLevel=1,isDaily=false,elapsed=0,boosterCount=0,removeMode=false;
 let selectedBooster:'undo'|'remove'|'shuffle'='undo',last=performance.now(),clock=0,winStars=3,rewardTaken=false,winCoins=0,winProcessed=false;
 let particles:Particle[]=[],toast='',toastUntil=0,transition=0,ready=false,adPending=false;
@@ -28,7 +30,9 @@ const fmt=(n:number)=>n.toLocaleString('ru-RU');
 const showToast=(text:string)=>{toast=text;toastUntil=clock+3.2};
 const openModal=(m:Modal)=>{modal=m;audio.play('tap')};
 const setScreen=(s:Screen)=>{screen=s;modal=null;transition=clock;removeMode=false;audio.setScene(s==='game'?'game':'menu');void platform.showBanner()};
-const daySeed=()=>Number(state().daily.date.replace(/-/g,''));
+const daySeed=()=>dailyPuzzleSeed(state().daily.date);
+const compact=()=>r.h<680;
+const navTop=()=>r.h-(compact()?86:92);
 function scatter(x:number,y:number,count=20,confetti=false){
   const colors=['#f5c373','#e6f5e0','#4ec4ac','#d7765c'];
   for(let i=0;i<count;i++){const a=Math.random()*Math.PI*2,v=confetti?90+Math.random()*180:30+Math.random()*110;const life=confetti?2+Math.random():.5+Math.random()*.5;particles.push({x,y,vx:Math.cos(a)*v,vy:Math.sin(a)*v-(confetti?140:20),life,max:life,size:confetti?4+Math.random()*4:2+Math.random()*3,color:colors[i%colors.length],angle:Math.random()*6});}
@@ -38,11 +42,13 @@ function startGame(level:number,daily=false,resume=false){
   if(!resume&&!progression.spendHeart()){openModal('hearts');return;}
   gameLevel=level;isDaily=daily;elapsed=0;boosterCount=0;rewardTaken=false;winProcessed=false;removeMode=false;screwFlight=null;hintPair=null;plankTextures.clear();
   attemptDate=state().daily.date;puzzle=new Puzzle(generateLevel(level,daily?daySeed():undefined),undefined,{physical:true});
-  if(resume&&state().checkpoint){const cp=state().checkpoint!;if(!puzzle.restore(cp.snapshot as ReturnType<Puzzle['snapshot']>)){progression.clearCheckpoint();showToast('Начинаем новый чертёж');}else{elapsed=cp.seconds;boosterCount=cp.boosterCount;}}
+  const cp=daily?state().dailyCheckpoint:state().checkpoint;
+  if(resume&&cp){if(!puzzle.restore(cp.snapshot as ReturnType<Puzzle['snapshot']>)){progression.clearCheckpoint(daily);showToast('Начинаем новый чертёж');}else{elapsed=cp.seconds;boosterCount=cp.boosterCount;}}
   if(level===1&&!state().tutorialDone){hintPair=puzzle.level.witness[0];hintUntil=clock+25;}
   physics=new BoardPhysics(puzzle.level,puzzle);setScreen('game');saveGame();audio.play('tap');
 }
-function resumeGame(){const cp=state().checkpoint;if(cp&&(!cp.daily||cp.date===state().daily.date))startGame(cp.level,cp.daily,true);else startGame(Math.min(state().level,LEVEL_COUNT));}
+function resumeGame(){const cp=state().checkpoint;if(cp&&!cp.daily)startGame(cp.level,false,true);else startGame(Math.min(state().level,LEVEL_COUNT));}
+function startDaily(){const cp=state().dailyCheckpoint;if(cp&&cp.date===state().daily.date)startGame(cp.level,true,true);else startGame(45+daySeed()%180,true);}
 function animateMove(result:NonNullable<ReturnType<Puzzle['move']>>){
   audio.play('screw');if(state().settings.haptic)platform.haptic();
   const h=puzzle!.holes[result.to>=0?result.to:result.from];scatter(board.x+h.x*board.w,board.y+h.y*board.h,12);
@@ -68,12 +74,12 @@ function showToastToast(){audio.play('error');showToast('Этот винт за�
 function win(){
   if(winProcessed)return;winProcessed=true;
   progression.tick();
-  if(isDaily&&attemptDate!==state().daily.date){progression.clearCheckpoint();setScreen('daily');showToast('Наступил новый день. Для вас готов новый чертёж.');return;}
+  if(isDaily&&attemptDate!==state().daily.date){progression.clearCheckpoint(true);setScreen('daily');showToast('Наступил новый день. Для вас готов новый чертёж.');return;}
   winStars=elapsed<150&&boosterCount===0?3:elapsed<300&&boosterCount<3?2:1;
   const reward=progression.completeLevel(gameLevel,winStars as 1|2|3,{screws:puzzle!.moves,seconds:Math.round(elapsed),boostersUsed:boosterCount,daily:isDaily});winCoins=reward?.coins||0;
   progression.refillHearts(1);
   if(gameLevel===1)progression.finishTutorial();
-  progression.clearCheckpoint();audio.play('win');scatter(W/2,250,80,true);
+  progression.clearCheckpoint(isDaily);audio.play('win');scatter(W/2,250,80,true);
   window.setTimeout(()=>{if(screen==='game'&&puzzle?.solved)modal='win'},700);
 }
 async function rewarded(grant:{coins?:number;heart?:number;booster?:'undo'|'remove'|'shuffle'|'hint'},fn:()=>void=()=>{}){
@@ -98,18 +104,18 @@ function hint(){
   else showToast('Дождитесь движения деталей или попробуйте отменить ход');
 }
 function header(title?:string,back=false){
-  const top=16;
+  const top=compact()?8:16;
   if(back)r.button('back','',16,top,44,44,()=>setScreen('home'),{kind:'square',icon:'back'});
   else r.button('settings','',16,top,44,44,()=>openModal('settings'),{kind:'square',icon:'gear'});
   r.pill('heart',String(state().hearts),168,top+3,74,()=>openModal('hearts'));
   r.pill('coin',fmt(state().coins),249,top+3,125,()=>setScreen('shop'));
-  if(title){r.text(title,W/2,94,27,COLORS.cream,800);r.text('МАСТЕРСКАЯ БОЛТОВ',W/2,121,10,COLORS.gold,800);}
+  if(title){r.text(title,W/2,compact()?79:94,compact()?24:27,COLORS.cream,800);if(r.h>=560)r.text('МАСТЕРСКАЯ БОЛТОВ',W/2,compact()?104:121,10,COLORS.gold,800);}
 }
 function nav(){
-  const y=r.h-92;r.panel(8,y,374,88);
+  const y=navTop(),short=compact();r.panel(8,y,374,short?78:88);
   const items:[Screen,string,string][]=[['home','home','Домой'],['levels','trophy','Уровни'],['daily','calendar','Задания'],['shop','shop','Магазин'],['collection','wardrobe','Коллекция']];
   items.forEach(([s,icon,label],i)=>{const x=29+i*68;
-    r.button('nav-'+s,'',x,y+14,60,41,()=>setScreen(s),{kind:screen===s?'primary':'square',icon});r.text(label,x+30,y+67,9,screen===s?'#fff0ce':COLORS.ink,800,'center',63);
+    r.button('nav-'+s,'',x,y+(short?9:14),60,41,()=>setScreen(s),{kind:screen===s?'primary':'square',icon});r.text(label,x+30,y+(short?62:67),9,screen===s?'#fff0ce':COLORS.ink,800,'center',63);
   });
 }
 function drawPlank(pose:Pose,alpha=1){
@@ -122,7 +128,7 @@ function drawPlank(pose:Pose,alpha=1){
   if(!texture){
     texture=document.createElement('canvas');texture.width=Math.ceil(l*2);texture.height=Math.ceil(w*2);
     const paint=texture.getContext('2d')!;paint.scale(2,2);
-    const image=r.images.get(asset);if(image)paint.drawImage(image,0,0,l,w);
+    const image=r.images.get(asset);if(image)drawBeamBitmap(paint,image,0,0,l,w);
     for(const drill of puzzle!.getDrillPoints(pose.id)){
       const xx=l/2+drill.x*board.w,yy=w/2+drill.y*board.w,radius=DRILL_RADIUS*board.w;
       const bevel=paint.createRadialGradient(xx,yy,radius*.82,xx,yy,radius+1.7);
@@ -137,7 +143,7 @@ function drawPlank(pose:Pose,alpha=1){
 }
 function screwAt(x:number,y:number,selected=false,scale=1){
   const c=r.c;c.save();c.translate(x,y);if(selected)c.rotate(Math.sin(clock*8)*.16);
-  if(selected){c.strokeStyle='#ffe3a4';c.lineWidth=2.5;c.shadowColor='#ffd596';c.shadowBlur=15;c.beginPath();c.arc(0,0,19,0,Math.PI*2);c.stroke();c.shadowBlur=0;}
+  if(selected){c.strokeStyle='#ffe3a4';c.lineWidth=2.5*scale;c.shadowColor='#ffd596';c.shadowBlur=15*scale;c.beginPath();c.arc(0,0,19*scale,0,Math.PI*2);c.stroke();c.shadowBlur=0;}
   const im=r.images.get(`skins/${state().skin}-screw.png`);
   if(im)c.drawImage(im,-13*scale,-13*scale,26*scale,26*scale);else r.image('screw.png',-13*scale,-13*scale,26*scale,26*scale);
   c.restore();
@@ -146,7 +152,7 @@ function miniPuzzle(x:number,y:number,size:number){
   const c=r.c;c.save();c.translate(x,y);c.rotate(Math.sin(clock*.6)*.025);
   const level=generateLevel(1),bh=size*BOARD_ASPECT;
   r.image('board.png',-size/2,-bh/2,size,bh);
-  for(const p of level.planks){c.save();c.translate((p.x-.5)*size,(p.y-.5)*bh);c.rotate(p.angle);r.image('plank.png',-p.length*size/2,-p.width*size/2,p.length*size,p.width*size);c.restore();}
+  for(const p of level.planks){c.save();c.translate((p.x-.5)*size,(p.y-.5)*bh);c.rotate(p.angle);const bitmap=r.images.get('plank.png');if(bitmap)drawBeamBitmap(c,bitmap,-p.length*size/2,-p.width*size/2,p.length*size,p.width*size);c.restore();}
   for(const hole of level.holes){const hx=(hole.x-.5)*size,hy=(hole.y-.5)*bh;
     if(hole.initialScrew)r.image('screw.png',hx-9,hy-9,18,18);
     else{c.fillStyle='#473528';c.beginPath();c.arc(hx,hy,7,0,Math.PI*2);c.fill();c.fillStyle='#ad8956';c.beginPath();c.arc(hx,hy+2,5,0,Math.PI*2);c.fill();}
@@ -154,69 +160,79 @@ function miniPuzzle(x:number,y:number,size:number){
   c.restore();
 }
 function home(){
-  header();r.text('МАСТЕРСКАЯ',W/2,105,31,COLORS.cream,900);r.text('БОЛТОВ',W/2,141,34,COLORS.gold,900);
-  const heroY=Math.min(335,r.h*.43),size=Math.min(238,(r.h-410)*.65+140);
-  miniPuzzle(W/2,heroY,size);
-  r.panel(98,heroY+size*.52-2,194,44);r.text(`УРОВЕНЬ ${Math.min(state().level,600)} / 600`,W/2,heroY+size*.52+18,14,COLORS.ink,800);
-  const playY=Math.min(r.h-235,heroY+size*.62+48);
-  r.button('play',state().checkpoint?'Продолжить':'Играть',54,playY,282,62,resumeGame,{kind:'primary',icon:'play'});
-  const cardsY=r.h-172;
-  if(cardsY-playY>85)r.text(state().checkpoint?'Ваша головоломка ждёт вас':'Освободи детали. Найди свой ход.',W/2,Math.min(playY+82,cardsY-14),13,'#d6dad0',600);
-  r.button('daily-reward','Подарок дня',18,cardsY,172,58,()=>openModal('login'),{icon:'gift',small:true});
-  r.button('daily-challenge','Вызов дня',200,cardsY,172,58,()=>setScreen('daily'),{icon:'calendar',small:true});
+  const short=compact();header();r.text('МАСТЕРСКАЯ',W/2,short?83:105,short?27:31,COLORS.cream,900);r.text('БОЛТОВ',W/2,short?115:141,short?30:34,COLORS.gold,900);
+  const cardsY=navTop()-72,playY=cardsY-(short?70:92),badgeY=playY-47;
+  const heroTop=short?139:173,heroBottom=badgeY+17,size=Math.min(238,(heroBottom-heroTop)/BOARD_ASPECT);
+  if(size>=40)miniPuzzle(W/2,(heroTop+heroBottom)/2,size);
+  r.panel(98,badgeY,194,35);r.text(`УРОВЕНЬ ${Math.min(state().level,600)} / 600`,W/2,badgeY+17,14,COLORS.ink,800);
+  r.button('play',state().checkpoint?'Продолжить':'Играть',54,playY,282,short?54:62,resumeGame,{kind:'primary',icon:'play'});
+  if(!short)r.text(state().checkpoint?'Ваша головоломка ждёт вас':'Освободи детали. Найди свой ход.',W/2,cardsY-14,12,'#d6dad0',600);
+  r.button('daily-reward','Подарок дня',18,cardsY,172,56,()=>openModal('login'),{icon:'gift',small:true});
+  r.button('daily-challenge','Вызов дня',200,cardsY,172,56,()=>setScreen('daily'),{icon:'calendar',small:true});
   nav();
 }
 function levels(){
-  header('Карта мастерства');const y=154;
-  r.panel(20,y,350,58);r.text('600 головоломок. Один верный ход.',W/2,y+22,14,COLORS.ink,800);r.progress(41,y+40,308,(state().level-1)/600,'#55886d');
-  const gridY=230,gridH=r.h-360,rowGap=gridH/5;
-  for(let i=0;i<25;i++){
-    const n=levelPage*25+i+1,x=19+(i%5)*72,yy=gridY+Math.floor(i/5)*rowGap,unlocked=n<=state().level;
+  const short=compact();header('Карта мастерства');const y=short?(r.h<560?108:121):154;
+  r.panel(20,y,350,short?48:58);r.text('600 головоломок. Один верный ход.',W/2,y+20,13,COLORS.ink,800);r.progress(41,y+(short?34:40),308,(state().level-1)/600,'#55886d');
+  const gridY=y+(short?62:76),pageY=navTop()-46,gridH=pageY-gridY-12;
+  const rows=Math.min(5,Math.max(1,Math.floor((gridH+8)/68))),perPage=rows*5,pages=Math.ceil(LEVEL_COUNT/perPage);
+  if(perPage!==levelPageSize){const oldStart=levelPage*levelPageSize,n=Math.min(state().level,LEVEL_COUNT)-1;levelPage=Math.floor((n>=oldStart&&n<oldStart+levelPageSize?n:oldStart)/perPage);levelPageSize=perPage;}
+  levelPage=Math.min(pages-1,levelPage);const rowGap=Math.min(91,gridH/rows);
+  for(let i=0;i<perPage;i++){
+    const n=levelPage*perPage+i+1,x=19+(i%5)*72,yy=gridY+Math.floor(i/5)*rowGap,unlocked=n<=state().level;
+    if(n>LEVEL_COUNT)continue;
     r.button('level-'+n,unlocked?String(n):'',x,yy,64,48,()=>startGame(n),{kind:n===state().level?'primary':'square',icon:unlocked?undefined:'lock',disabled:!unlocked});
     const stars=state().stars[String(n)]||0;for(let j=0;j<3;j++)r.icon('star',x+10+j*14,yy+50,11,j<stars?1:.18);
   }
-  r.button('prev','',22,r.h-128,47,40,()=>{levelPage=Math.max(0,levelPage-1)},{kind:'square',icon:'back',disabled:levelPage===0});
-  r.text(`${levelPage+1} / 24`,W/2,r.h-108,14,COLORS.cream,800);
-  r.button('next','Далее',290,r.h-128,78,40,()=>{levelPage=Math.min(23,levelPage+1)},{small:true,disabled:levelPage===23});nav();
+  r.button('prev','',22,pageY,47,34,()=>{levelPage=Math.max(0,levelPage-1)},{kind:'square',icon:'back',disabled:levelPage===0});
+  r.text(`${levelPage+1} / ${pages}`,W/2,pageY+17,14,COLORS.cream,800);
+  r.button('next','Далее',290,pageY,78,34,()=>{levelPage=Math.min(pages-1,levelPage+1)},{small:true,disabled:levelPage===pages-1});nav();
 }
 function daily(){
-  header('Задания дня');const y=151,taskY=315;
-  r.panel(19,y,352,148);r.icon('calendar',48,y+16,30);r.text('ГОЛОВОЛОМКА ДНЯ',94,y+31,13,COLORS.ink,800,'left',242);
-  r.text('Новый чертёж. Новая награда.',W/2,y+58,14,COLORS.ink,700);
-  r.icon('coin',106,y+70,21);r.text('150 монет за решение',135,y+81,12,COLORS.ink,600,'left',195);
-  r.button('daily-play',state().daily.completed?'Пройдено сегодня':'Принять вызов',42,y+99,306,34,()=>startGame(45+daySeed()%180,true),{kind:'primary',disabled:state().daily.completed,small:true});
+  const short=compact(),tight=r.h<560;header('Задания дня');const y=short?(tight?100:121):151,challengeH=short?(tight?104:126):148,taskY=y+challengeH+16;
+  r.panel(19,y,352,challengeH);r.icon('calendar',48,y+15,short?25:30);r.text('ГОЛОВОЛОМКА ДНЯ',89,y+(short?27:31),13,COLORS.ink,800,'left',247);
+  if(!tight)r.text('Новый чертёж. Новая награда.',W/2,y+(short?48:58),short?12:14,COLORS.ink,700);
+  const rewardY=y+(tight?48:short?69:81);r.icon('coin',106,rewardY-11,21);r.text('150 монет за решение',135,rewardY,12,COLORS.ink,600,'left',195);
+  r.button('daily-play',state().daily.completed?'Пройдено сегодня':state().dailyCheckpoint?'Продолжить вызов':'Принять вызов',42,y+challengeH-47,306,short?32:34,startDaily,{kind:'primary',disabled:state().daily.completed,small:true});
   r.text('ЗАДАНИЯ ДНЯ',23,taskY,12,COLORS.gold,800,'left');
-  const tasks=progression.tasks();const cardH=Math.min(94,(r.h-460)/3);
-  tasks.forEach((task,i)=>{
-    const yy=taskY+18+i*(cardH+9);r.panel(19,yy,352,cardH);
-    const cy=yy+cardH/2;r.icon(['trophy','screw','star'][i],43,cy-16,32);r.text(task.title,91,cy-12,13,COLORS.ink,800,'left',158);
-    r.text(`${task.progress} / ${task.goal}`,91,cy+11,12,COLORS.ink,600,'left');
+  const tasks=progression.tasks(),space=navTop()-14-(taskY+18),rows=Math.min(3,Math.max(1,Math.floor((space+8)/61))),pages=Math.ceil(3/rows);
+  dailyTaskPage=Math.min(dailyTaskPage,pages-1);const cardH=Math.min(94,(space-(pages>1?36:0)-(rows-1)*8)/rows);
+  tasks.slice(dailyTaskPage*rows,(dailyTaskPage+1)*rows).forEach((task,i)=>{
+    const yy=taskY+18+i*(cardH+8);r.panel(19,yy,352,cardH);
+    const cy=yy+cardH/2,small=cardH<70;r.icon(['trophy','screw','star'][dailyTaskPage*rows+i],43,cy-(small?13:16),small?26:32);r.text(task.title,91,cy-(small?8:12),small?12:13,COLORS.ink,800,'left',158);
+    r.text(`${task.progress} / ${task.goal}`,91,cy+(small?9:11),small?10:12,COLORS.ink,600,'left');
     if(cardH>=90)r.progress(91,yy+cardH-22,158,task.progress/task.goal,'#598b71');
-    r.button('task-'+task.id,task.claimed?'Взято':String(task.reward),266,cy-19,82,38,()=>{if(progression.claimTask(task.id)){audio.play('reward');showToast('Награда получена')}},{icon:task.claimed?'check':'coin',disabled:task.claimed||task.progress<task.goal,small:true});
+    r.button('task-'+task.id,task.claimed?'Взято':String(task.reward),266,cy-(small?16:19),82,small?32:38,()=>{if(progression.claimTask(task.id)){audio.play('reward');showToast('Награда получена')}},{icon:task.claimed?'check':'coin',disabled:task.claimed||task.progress<task.goal,small:true});
   });
-  if(r.h>=780)r.button('login-daily','Награда за вход',50,r.h-142,290,40,()=>openModal('login'),{icon:'gift',small:true});nav();
+  if(pages>1){const yy=navTop()-42;r.button('task-prev','',32,yy,44,29,()=>{dailyTaskPage--},{kind:'square',icon:'back',disabled:dailyTaskPage===0});r.text(`${dailyTaskPage+1} / ${pages}`,W/2,yy+15,12,COLORS.cream,700);r.button('task-next','Далее',292,yy,66,29,()=>{dailyTaskPage++},{small:true,disabled:dailyTaskPage===pages-1});}
+  nav();
 }
 function shop(){
-  header('Лавка мастера');r.text('Помощь для сложного чертежа',W/2,153,14,COLORS.muted,600);
+  const short=compact();header('Лавка мастера');if(!short)r.text('Помощь для сложного чертежа',W/2,153,14,COLORS.muted,600);
   const cards:[string,string,string,string][]=[['undo','undo','Отмена хода','Верните последний винт на место'],['remove','hammer','Снять винт','Уберите один винт с поля'],['shuffle','plus','Ещё отверстие','Откройте свободное место для винта']];
-  const rowH=Math.min(120,(r.h-390)/3);
-  cards.forEach(([id,icon,title,description],i)=>{
-    const y=178+i*(rowH+12);r.panel(18,y,354,rowH);r.icon(icon,32,y+22,44);
-    r.text(title,90,y+23,18,COLORS.ink,800,'left',240);r.text(description,90,y+43,10,COLORS.ink,600,'left',253);
-    r.text(`В запасе: ${state().boosters[id as 'undo']}`,36,y+rowH-27,12,COLORS.ink,700,'left',150);
-    r.button('buy-'+id,String(BOOSTER_PRICES[id as 'undo']),222,y+rowH-48,128,40,()=>{if(progression.buyBooster(id as 'undo')){audio.play('reward');showToast('Буст добавлен в запас')}else showToast('Недостаточно монет')},{kind:'primary',icon:'coin',small:true});
+  const top=short?(r.h<560?112:125):178,coinTop=navTop()-94,space=coinTop-top-14,rows=Math.min(3,Math.max(1,Math.floor((space+10)/82))),pages=Math.ceil(cards.length/rows);
+  shopPage=Math.min(shopPage,pages-1);const rowH=Math.min(120,(space-(pages>1?44:0)-(rows-1)*10)/rows);
+  cards.slice(shopPage*rows,(shopPage+1)*rows).forEach(([id,icon,title,description],i)=>{
+    const y=top+i*(rowH+10);r.panel(18,y,354,rowH);const small=rowH<100;
+    r.icon(icon,35,y+(rowH-(small?32:44))/2,small?32:44);
+    r.text(title,small?82:90,y+(small?rowH/2-11:23),small?14:18,COLORS.ink,800,'left',small?132:240);
+    if(!small)r.text(description,90,y+43,10,COLORS.ink,600,'left',253);
+    r.text(`В запасе: ${state().boosters[id as 'undo']}`,small?82:36,y+(small?rowH/2+13:rowH-27),small?11:12,COLORS.ink,700,'left',150);
+    r.button('buy-'+id,String(BOOSTER_PRICES[id as 'undo']),222,y+(small?(rowH-38)/2:rowH-48),128,small?38:40,()=>{if(progression.buyBooster(id as 'undo')){audio.play('reward');showToast('Буст добавлен в запас')}else showToast('Недостаточно монет')},{kind:'primary',icon:'coin',small:true});
   });
-  r.panel(18,r.h-186,354,83);r.icon('coin',31,r.h-170,37);r.text('Сундук монет',82,r.h-163,15,COLORS.ink,800,'left');
-  r.button('reward-coins','Видео + 100',202,r.h-168,151,43,()=>rewarded({coins:100},()=>showToast('+100 монет')),{kind:'primary',small:true});
-  r.text('Награда после полного просмотра',W/2,r.h-120,11,COLORS.ink,600);nav();
+  if(pages>1){const yy=coinTop-42;r.button('shop-prev','',32,yy,44,30,()=>{shopPage--},{kind:'square',icon:'back',disabled:shopPage===0});r.text(`${shopPage+1} / ${pages}`,W/2,yy+15,12,COLORS.cream,700);r.button('shop-next','Далее',292,yy,66,30,()=>{shopPage++},{small:true,disabled:shopPage===pages-1});}
+  r.panel(18,coinTop,354,80);r.icon('coin',34,coinTop+16,32);r.text('Сундук монет',82,coinTop+27,14,COLORS.ink,800,'left',112);
+  r.button('reward-coins','Видео + 100',202,coinTop+15,151,40,()=>rewarded({coins:100},()=>showToast('+100 монет')),{kind:'primary',small:true});
+  r.text('Награда после полного просмотра',W/2,coinTop+65,11,COLORS.ink,600);nav();
 }
 function collection(){
-  header('Ваша мастерская');r.button('tab-skins','Винты',24,151,165,44,()=>{collectionTab='skins'},{kind:collectionTab==='skins'?'primary':'secondary',icon:'screw'});
-  r.button('tab-bg','Фоны',201,151,165,44,()=>{collectionTab='backgrounds'},{kind:collectionTab==='backgrounds'?'primary':'secondary',icon:'wardrobe'});
+  header('Ваша мастерская');const tabY=compact()?(r.h<560?109:125):151;r.button('tab-skins','Винты',24,tabY,165,44,()=>{collectionTab='skins';collectionPage=0},{kind:collectionTab==='skins'?'primary':'secondary',icon:'screw'});
+  r.button('tab-bg','Фоны',201,tabY,165,44,()=>{collectionTab='backgrounds';collectionPage=0},{kind:collectionTab==='backgrounds'?'primary':'secondary',icon:'wardrobe'});
   const items=collectionTab==='skins'?SKINS:BACKGROUNDS;
-  const cellH=Math.min(159,(r.h-327)/3),cellW=168;
-  items.forEach((item,i)=>{
-    const x=22+(i%2)*178,y=213+Math.floor(i/2)*(cellH+9);
+  const top=tabY+60,space=navTop()-14-top,rows=Math.min(3,Math.max(1,Math.floor((space+9)/137))),perPage=rows*2,pages=Math.ceil(items.length/perPage);
+  collectionPage=Math.min(collectionPage,pages-1);const cellH=Math.min(159,(space-(pages>1?44:0)-(rows-1)*9)/rows),cellW=168;
+  items.slice(collectionPage*perPage,(collectionPage+1)*perPage).forEach((item,i)=>{
+    const x=22+(i%2)*178,y=top+Math.floor(i/2)*(cellH+9);
     r.panel(x,y,cellW,cellH);
     const owned=collectionTab==='skins'?state().ownedSkins.includes(item.id):state().ownedBackgrounds.includes(item.id);
     const active=(collectionTab==='skins'?state().skin:state().background)===item.id;
@@ -231,65 +247,77 @@ function collection(){
       else if(progression.buyCosmetic(type,item.id)){audio.play('reward');showToast('Новый предмет в коллекции');}
       else showToast('Недостаточно монет');
     },{kind:active?'primary':'secondary',icon:owned?'check':'coin',small:true});
-  });nav();
+  });
+  if(pages>1){const yy=navTop()-44;r.button('collection-prev','',32,yy,44,32,()=>{collectionPage--},{kind:'square',icon:'back',disabled:collectionPage===0});r.text(`${collectionPage+1} / ${pages}`,W/2,yy+16,12,COLORS.cream,700);r.button('collection-next','Далее',292,yy,66,32,()=>{collectionPage++},{small:true,disabled:collectionPage===pages-1});}
+  nav();
 }
 function gameplay(){
   if(!puzzle)return;
-  const hudY=18;
-  r.button('pause','',16,hudY,45,45,()=>openModal('pause'),{kind:'square',icon:'pause'});
-  r.panel(112,hudY,167,53);r.text(isDaily?'ВЫЗОВ ДНЯ':`УРОВЕНЬ ${gameLevel}`,W/2,hudY+18,14,COLORS.ink,800);r.text(puzzle.level.name,W/2,hudY+38,10,COLORS.ink,600,'center',148);
-  r.button('help','',330,hudY,44,45,()=>openModal('help'),{kind:'square',icon:'hint'});
-  const min=Math.floor(elapsed/60),sec=Math.floor(elapsed%60);r.text(`${String(min).padStart(2,'0')}:${String(sec).padStart(2,'0')}`,W/2,94,18,COLORS.cream,800);
-  r.text(removeMode?'Выберите винт для снятия':puzzle.selected===null?'Выберите винт':'Теперь выберите свободное отверстие',W/2,125,13,COLORS.cream,700);
-  const available=r.h-320;board.w=Math.min(340,available/BOARD_ASPECT);board.h=board.w*BOARD_ASPECT;board.x=(W-board.w)/2;board.y=159+(available-board.h)/2;
+  const short=compact(),hudY=short?7:18;
+  r.button('pause','',16,hudY,45,short?43:45,()=>openModal('pause'),{kind:'square',icon:'pause'});
+  const min=Math.floor(elapsed/60),sec=Math.floor(elapsed%60),time=`${String(min).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+  r.panel(112,hudY,167,short?45:53);r.text(isDaily?'ВЫЗОВ ДНЯ':`УРОВЕНЬ ${gameLevel}`,W/2,hudY+16,14,COLORS.ink,800);
+  r.text(short?`${time} · ${removeMode?'Снять болт':puzzle.selected===null?'Выберите болт':'Выберите отверстие'}`:puzzle.level.name,W/2,hudY+(short?32:38),10,COLORS.ink,600,'center',148);
+  r.button('help','',330,hudY,44,short?43:45,()=>openModal('help'),{kind:'square',icon:'hint'});
+  if(!short){r.text(time,W/2,94,18,COLORS.cream,800);r.text(removeMode?'Выберите винт для снятия':puzzle.selected===null?'Выберите винт':'Теперь выберите свободное отверстие',W/2,125,13,COLORS.cream,700);}
+  const fieldTop=short?63:159,footerY=r.h-(short?68:131),available=short?footerY-fieldTop-23:r.h-320;
+  board.w=Math.min(340,available/BOARD_ASPECT);board.h=board.w*BOARD_ASPECT;board.x=(W-board.w)/2;board.y=fieldTop+(available-board.h)/2;
+  const artScale=board.w/340;
   r.image('board.png',board.x-6,board.y-7,board.w+12,board.h+14);
   const c=r.c;
   for(const hole of puzzle.holes){
     const x=board.x+hole.x*board.w,y=board.y+hole.y*board.h;
-    c.fillStyle='#573b26';c.beginPath();c.arc(x,y,10.5,0,Math.PI*2);c.fill();c.fillStyle='#ad8956';c.beginPath();c.arc(x,y+2,7.7,0,Math.PI*2);c.fill();c.fillStyle='#392b22';c.beginPath();c.arc(x,y+1,6.5,0,Math.PI*2);c.fill();
+    c.fillStyle='#573b26';c.beginPath();c.arc(x,y,10.5*artScale,0,Math.PI*2);c.fill();c.fillStyle='#ad8956';c.beginPath();c.arc(x,y+2*artScale,7.7*artScale,0,Math.PI*2);c.fill();c.fillStyle='#392b22';c.beginPath();c.arc(x,y+artScale,6.5*artScale,0,Math.PI*2);c.fill();
   }
+  // A bolt's visibility follows real drawing depth, never its clickability.
+  // Wood naturally covers pixels of lower heads as it swings across them.
+  const poses=(puzzle.livePlanks as Pose[]).sort((a,b)=>a.layer-b.layer);
+  const boltLayers=new Map<number,number>();
+  for(const pose of poses)for(const binding of puzzle.getSupportBindings(pose.id))boltLayers.set(binding.hole,Math.max(boltLayers.get(binding.hole)??-Infinity,pose.layer));
+  const drawBolt=(id:number)=>{if(!puzzle!.screws[id]||screwFlight?.hole===id)return;const hole=puzzle!.holes[id];screwAt(board.x+hole.x*board.w,board.y+hole.y*board.h,puzzle!.selected===id||removeMode||!!(hintPair&&hintPair.from===id&&clock<hintUntil),artScale);};
   c.save();c.beginPath();c.rect(board.x-13,board.y-13,board.w+26,board.h+31);c.clip();
-  for(const raw of puzzle.livePlanks as Pose[])drawPlank(raw);
+  for(const layer of [...new Set(poses.map(p=>p.layer))]){
+    for(const pose of poses)if(pose.layer===layer)drawPlank(pose);
+    for(const [hole,ownerLayer]of boltLayers)if(ownerLayer===layer)drawBolt(hole);
+  }
+  for(const hole of puzzle.holes)if(!boltLayers.has(hole.id))drawBolt(hole.id);
   c.restore();
   for(const hole of puzzle.holes){const x=board.x+hole.x*board.w,y=board.y+hole.y*board.h;
     const reachable=puzzle.canSelect(hole.id);
-    if(puzzle.screws[hole.id]&&reachable&&screwFlight?.hole!==hole.id)screwAt(x,y,puzzle.selected===hole.id||removeMode||!!(hintPair&&hintPair.from===hole.id&&clock<hintUntil));
     if(!puzzle.screws[hole.id]&&puzzle.selected!==null&&puzzle.canMove(puzzle.selected,hole.id)){
-      c.strokeStyle='rgba(114,222,179,.75)';c.lineWidth=2;c.beginPath();c.arc(x,y,11.7,0,Math.PI*2);c.stroke();
+      c.strokeStyle='rgba(114,222,179,.75)';c.lineWidth=2;c.beginPath();c.arc(x,y,11.7*artScale,0,Math.PI*2);c.stroke();
     }
-    if(hintPair&&hintPair.to===hole.id&&clock<hintUntil){c.strokeStyle='#79dfb6';c.lineWidth=3;c.beginPath();c.arc(x,y,14+Math.sin(clock*6)*2,0,Math.PI*2);c.stroke();}
+    if(hintPair&&hintPair.to===hole.id&&clock<hintUntil){c.strokeStyle='#79dfb6';c.lineWidth=3;c.beginPath();c.arc(x,y,(14+Math.sin(clock*6)*2)*artScale,0,Math.PI*2);c.stroke();}
     if(!puzzle.screws[hole.id]||reachable)r.hits.push({id:'hole-'+hole.id,label:`Отверстие ${hole.id+1}`,x:x-17,y:y-17,w:34,h:34,fn:()=>holeTap(hole.id)});
   }
   if(screwFlight){const flight=screwFlight,t=Math.min(1,(clock-flight.start)/.46),e=t*t*(3-2*t);
     const fx=board.x+(flight.from.x+(flight.to.x-flight.from.x)*e)*board.w,fy=board.y+(flight.from.y+(flight.to.y-flight.from.y)*e)*board.h-Math.sin(t*Math.PI)*35;
-    c.save();c.translate(fx,fy);c.rotate(t*Math.PI*4);c.globalAlpha=flight.removing?1-t:1;const size=26+Math.sin(t*Math.PI)*9,asset=`skins/${state().skin}-screw.png`;r.image(r.images.has(asset)?asset:'screw.png',-size/2,-size/2,size,size);c.restore();
+    c.save();c.translate(fx,fy);c.rotate(t*Math.PI*4);c.globalAlpha=flight.removing?1-t:1;const size=(26+Math.sin(t*Math.PI)*9)*artScale,asset=`skins/${state().skin}-screw.png`;r.image(r.images.has(asset)?asset:'screw.png',-size/2,-size/2,size,size);c.restore();
     if(t>=1){screwFlight=null;scatter(fx,fy,9);}
   }
-  const footerY=r.h-131;
-  r.text(`Ходы: ${puzzle.moves}`,26,footerY-21,12,COLORS.muted,700,'left');
-  r.text(`Детали: ${puzzle.removed.filter(Boolean).length} / ${puzzle.planks.length}`,364,footerY-21,12,COLORS.muted,700,'right');
+  r.text(`Ходы: ${puzzle.moves}`,26,footerY-(short?12:21),short?10:12,COLORS.muted,700,'left');
+  r.text(`Детали: ${puzzle.removed.filter(Boolean).length} / ${puzzle.planks.length}`,364,footerY-(short?12:21),short?10:12,COLORS.muted,700,'right');
   const tools:[string,string,()=>void,string][]=[['undo','undo',()=>booster('undo'),String(state().boosters.undo)],['remove','hammer',()=>booster('remove'),String(state().boosters.remove)],['shuffle','plus',()=>booster('shuffle'),String(state().boosters.shuffle)],['hint','hint',hint,String(state().boosters.hint)]];
-  tools.forEach(([id,icon,fn,count],i)=>{const x=26+i*89;r.button('tool-'+id,'',x,footerY,70,60,fn,{kind:removeMode&&id==='remove'?'primary':'square',icon});
+  tools.forEach(([id,icon,fn,count],i)=>{const x=26+i*89;r.button('tool-'+id,'',x,footerY,70,short?43:60,fn,{kind:removeMode&&id==='remove'?'primary':'square',icon});
     if(id==='hint'&&state().boosters.hint===0)r.image('ui/badge-ad.png',x+34,footerY-3,40,17);
     else if(count){r.panel(x+48,footerY-5,26,24);r.text(count,x+61,footerY+7,10,COLORS.ink,800);}
-    r.text(['Отмена','Снять','Место','Подсказка'][i],x+35,footerY+75,10,COLORS.cream,700);
+    r.text(['Отмена','Снять','Место','Подсказка'][i],x+35,footerY+(short?54:75),10,COLORS.cream,700);
   });
-  if(gameLevel===1&&puzzle.moves===0)r.text('Перенесите винты в верхние отверстия',W/2,board.y+board.h+27,11,COLORS.gold,700);
+  if(!short&&gameLevel===1&&puzzle.moves===0)r.text('Перенесите винты в верхние отверстия',W/2,board.y+board.h+27,11,COLORS.gold,700);
 }
 function dialog(){
   if(!modal)return;
   const c=r.c;c.fillStyle='rgba(7,17,22,.76)';c.fillRect(0,0,W,r.h);r.hits=[];
-  let h=modal==='login'?488:modal==='win'?420:modal==='settings'?464:modal==='help'?424:modal==='hearts'?410:340;
-  const y=(r.h-h)/2,x=22,w=346;r.panel(x,y,w,h);
+  let h=modal==='login'?488:modal==='win'?420:modal==='settings'?356:modal==='help'?424:modal==='hearts'?410:340;
+  const modalScale=Math.min(1,(r.h-24)/h),modalOffset=W*(1-modalScale)/2;
+  c.save();c.translate(modalOffset,0);c.scale(modalScale,modalScale);
+  const y=(r.h/modalScale-h)/2,x=22,w=346;r.panel(x,y,w,h);
   const title={settings:'Настройки',login:'Подарок за возвращение',hearts:'Нужна новая жизнь?',pause:'Немного передохнём',win:'Отличная работа!',restart:'Начать заново?',help:'Как играть',booster:'Помощь мастера'}[modal];
   r.text(title,W/2-7,y+39,21,COLORS.ink,800,'center',242);
   r.button('close','',323,y+17,29,29,()=>{if(modal==='win')setScreen('home');else modal=null},{kind:'square',icon:'close'});
   if(modal==='settings'){
     const settings:[string,string,string][]=[['sound','sound','Звуки'],['music','music','Музыка'],['haptic','heart','Вибрация']];
     settings.forEach(([id,icon,label],i)=>{const yy=y+85+i*68;r.icon(icon,45,yy+6,32);r.text(label,95,yy+22,17,COLORS.ink,700,'left');const enabled=state().settings[id as 'sound'];r.button('setting-'+id,enabled?'Вкл':'Выкл',246,yy,92,43,()=>{progression.setSetting(id as 'sound',!enabled);syncAudio()},{kind:enabled?'primary':'secondary',small:true});});
-    r.text('Ваш прогресс сохраняется автоматически',W/2,y+318,12,COLORS.ink,600);
-    r.text(platform.user?`VK · ${platform.user.name}`:'Локальная мастерская',W/2,y+344,13,COLORS.ink,800,'center',294);
-      r.text('Мастерская болтов · 1.0',W/2,y+370,11,COLORS.ink,600);
     r.button('settings-help','Правила игры',54,y+h-63,282,42,()=>{modal='help'},{icon:'hint',small:true});
   }
   if(modal==='login'){
@@ -300,7 +328,7 @@ function dialog(){
     }
     r.wrap('Семь дней в мастерской — целый сундук монет. Пропуск дня начнёт цепочку заново.',W/2,y+334,280,13,COLORS.ink,20);
     const claimed=state().login.lastClaim===state().daily.date;
-    r.button('claim-login',claimed?'До встречи завтра':'Забрать подарок',49,y+h-70,292,48,()=>{const result=progression.claimLogin();if(result){audio.play('reward');scatter(W/2,y+270,45,true);showToast('Ежедневный подарок получен')}},{kind:'primary',icon:claimed?'check':'gift',disabled:claimed});
+    r.button('claim-login',claimed?'До встречи завтра':'Забрать подарок',49,y+h-70,292,48,()=>{const result=progression.claimLogin();if(result){audio.play('reward');scatter(W/2,(y+270)*modalScale,45,true);showToast('Ежедневный подарок получен')}},{kind:'primary',icon:claimed?'check':'gift',disabled:claimed});
   }
   if(modal==='hearts'){
     r.icon('heart',W/2-31,y+81,62);r.text(`Жизни: ${state().hearts} / 5`,W/2,y+166,18,COLORS.ink,800);
@@ -344,6 +372,8 @@ function dialog(){
       modal=null;adPending=true;audio.paused=true;await platform.interstitial();adPending=false;audio.paused=platform.paused||document.hidden;startGame(gameLevel+1);
     },{kind:'primary',icon:'play'});
   }
+  c.restore();
+  if(modalScale<1)r.hits.forEach(hit=>{hit.x=modalOffset+hit.x*modalScale;hit.y*=modalScale;hit.w*=modalScale;hit.h*=modalScale;});
 }
 function syncAudio(){audio.sound=state().settings.sound;audio.music=state().settings.music;}
 function draw(now:number){

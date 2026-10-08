@@ -2,7 +2,7 @@ import test, { beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { Progression, sanitizeProgress, encodeProgress, dailyDate, HEART_REGEN_MS, LOGIN_REWARDS, SKINS, BACKGROUNDS } from './progression';
 import { type VKPlatform } from './platform';
-import { Puzzle, generateLevel } from './puzzle';
+import { Puzzle, generateLevel, dailyPuzzleSeed } from './puzzle';
 
 const local = new Map<string, string>();
 Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: {
@@ -205,10 +205,10 @@ test('sanitization rejects invalid economy and checkpoint identity; all levels f
   assert.deepEqual(resumed.checkpoint?.snapshot, puzzle.snapshot(), 'saved seed must reconstruct the same geometry');
   const obsolete={...checkpoint,snapshot:{...puzzle.snapshot(),seed:123456}};
   assert.equal(sanitizeProgress({...state,checkpoint:obsolete},initialTime).checkpoint,null,'An obsolete campaign seed cannot select a random daily board');
-  const date=dailyDate(initialTime),dailyPuzzle=new Puzzle(generateLevel(1,Number(date.replaceAll('-',''))));
+  const date=dailyDate(initialTime),dailyPuzzle=new Puzzle(generateLevel(1,dailyPuzzleSeed(date)));
   const dailyCheckpoint={...checkpoint,daily:true,date,snapshot:dailyPuzzle.snapshot()};
-  assert.deepEqual(sanitizeProgress({...state,checkpoint:dailyCheckpoint},initialTime).checkpoint?.snapshot,dailyPuzzle.snapshot(),'The current daily seed resumes exactly');
-  assert.equal(sanitizeProgress({...state,checkpoint:{...dailyCheckpoint,snapshot:{...dailyPuzzle.snapshot(),seed:123456}}},initialTime).checkpoint,null,'An obsolete daily seed is rejected');
+  assert.deepEqual(sanitizeProgress({...state,checkpoint:dailyCheckpoint},initialTime).dailyCheckpoint?.snapshot,dailyPuzzle.snapshot(),'The current daily seed resumes exactly in its separate slot');
+  assert.equal(sanitizeProgress({...state,checkpoint:{...dailyCheckpoint,snapshot:{...dailyPuzzle.snapshot(),seed:123456}}},initialTime).dailyCheckpoint,null,'An obsolete daily seed is rejected');
   assert.equal(sanitizeProgress({ ...state, checkpoint: { ...checkpoint, level: 2 } }, initialTime).checkpoint, null);
   for (let level = 1; level <= 600; level++) resumed.stars[String(level)] = 3;
   resumed.level = 601;
@@ -233,4 +233,63 @@ test('physical VK checkpoints preserve moving bodies and bindings within the clo
     const restored=sanitizeProgress(wire,initialTime);
     assert.deepEqual(restored.checkpoint?.snapshot,puzzle.snapshot(),`Physical level${level} cloud roundtrip`);
   }
+});
+
+test('daily attempts preserve campaign continuation and expire independently at midnight',async()=>{
+  let now=initialTime;
+  const progress=new Progression(platform().vk,()=>now);
+  try{
+    await progress.init();
+    const date=dailyDate(now),campaign=new Puzzle(generateLevel(1),undefined,{physical:true});
+    assert.ok(campaign.move(3,0));
+    const campaignSave={level:1,daily:false,date,snapshot:campaign.snapshot(),seconds:9,boosterCount:0};
+    assert.ok(progress.saveCheckpoint(campaignSave));
+    const challenge=new Puzzle(generateLevel(150,dailyPuzzleSeed(date)),undefined,{physical:true});
+    const dailySave={level:150,daily:true,date,snapshot:challenge.snapshot(),seconds:18,boosterCount:1};
+    assert.ok(progress.saveCheckpoint(dailySave));
+    assert.deepEqual(progress.state.checkpoint,campaignSave);
+    assert.deepEqual(progress.state.dailyCheckpoint,dailySave);
+    const restored=sanitizeProgress(JSON.parse(encodeProgress(progress.state)),now);
+    assert.deepEqual(restored.checkpoint,campaignSave);
+    assert.deepEqual(restored.dailyCheckpoint,dailySave);
+    progress.clearCheckpoint(true);
+    assert.deepEqual(progress.state.checkpoint,campaignSave);
+    assert.equal(progress.state.dailyCheckpoint,null);
+    assert.ok(progress.saveCheckpoint(dailySave));
+    now+=86_400_000;progress.tick();
+    assert.deepEqual(progress.state.checkpoint,campaignSave);
+    assert.equal(progress.state.dailyCheckpoint,null);
+  }finally{progress.dispose();}
+});
+
+test('a legacy daily checkpoint migrates out of the main-menu campaign slot',()=>{
+  const state=sanitizeProgress({},initialTime),date=dailyDate(initialTime);
+  const daily={level:150,daily:true,date,snapshot:new Puzzle(generateLevel(150,dailyPuzzleSeed(date)),undefined,{physical:true}).snapshot(),seconds:7,boosterCount:0};
+  const migrated=sanitizeProgress({...state,checkpoint:daily},initialTime);
+  assert.equal(migrated.checkpoint,null);
+  assert.deepEqual(migrated.dailyCheckpoint,daily);
+  const obsolete={...daily,snapshot:{...daily.snapshot,seed:Number(date.replace(/-/g,''))}};
+  assert.equal(sanitizeProgress({...state,checkpoint:obsolete},initialTime).dailyCheckpoint,null);
+});
+
+test('two dense boards keep the campaign in VK and retain both in the local backup',async()=>{
+  const mock=platform('77',true),progress=new Progression(mock.vk,()=>initialTime);
+  let reloaded:Progression|undefined;
+  try{
+    await progress.init();
+    for(let n=1;n<=600;n++)progress.state.stars[String(n)]=3;
+    progress.state.level=601;
+    const date=dailyDate(initialTime),campaign={level:600,daily:false,date,snapshot:new Puzzle(generateLevel(600),undefined,{physical:true}).snapshot(),seconds:36,boosterCount:1};
+    const daily={level:200,daily:true,date,snapshot:new Puzzle(generateLevel(200,dailyPuzzleSeed(date)),undefined,{physical:true}).snapshot(),seconds:25,boosterCount:0};
+    assert.ok(progress.saveCheckpoint(campaign));assert.ok(progress.saveCheckpoint(daily));
+    const cloud=encodeProgress(progress.state,true);
+    assert.ok(new TextEncoder().encode(cloud).length<=4000);
+    assert.deepEqual(sanitizeProgress(JSON.parse(cloud),initialTime).checkpoint,campaign);
+    const backup=sanitizeProgress(JSON.parse(encodeProgress(progress.state)),initialTime);
+    assert.deepEqual(backup.checkpoint,campaign);assert.deepEqual(backup.dailyCheckpoint,daily);
+    await progress.flush();
+    reloaded=new Progression(mock.vk,()=>initialTime);await reloaded.init();
+    assert.deepEqual(reloaded.state.checkpoint,campaign);
+    assert.deepEqual(reloaded.state.dailyCheckpoint,daily);
+  }finally{progress.dispose();reloaded?.dispose();}
 });

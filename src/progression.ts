@@ -1,5 +1,5 @@
 import { platform, type VKPlatform } from './platform';
-import { generateLevel, Puzzle, type Hole, type PuzzleSnapshot } from './puzzle';
+import { generateLevel, dailyPuzzleSeed, Puzzle, type Hole, type PuzzleSnapshot } from './puzzle';
 
 export const CAMPAIGN_LEVELS = 600;
 export const MAX_HEARTS = 5;
@@ -49,6 +49,7 @@ export interface ProgressState {
   settings: Record<Setting, boolean>;
   tutorialDone: boolean;
   checkpoint: GameCheckpoint | null;
+  dailyCheckpoint: GameCheckpoint | null;
 }
 export interface GameCheckpoint { level: number; daily: boolean; date: string; snapshot: PuzzleSnapshot; seconds: number; boosterCount: number }
 export interface DailyTask { id: string; title: string; goal: number; target: number; progress: number; reward: number; claimed: boolean; complete: boolean }
@@ -80,7 +81,7 @@ function newState(now: number): ProgressState {
     daily: { date: dailyDate(now), completed: false, taskProgress: {}, taskClaimed: [] },
     login: { lastClaim: '', streak: 0 },
     stats: { totalWins: 0, totalScrews: 0, playSeconds: 0, bestSeconds: 0, adsWatched: 0, loginDays: 0 },
-    settings: { sound: true, music: true, haptic: true }, tutorialDone: false, checkpoint: null,
+    settings: { sound: true, music: true, haptic: true }, tutorialDone: false, checkpoint: null, dailyCheckpoint: null,
   };
 }
 /** Corrupt / old / tampered saves cannot introduce negative balances, unknown
@@ -127,7 +128,10 @@ export function sanitizeProgress(value: unknown, now = Date.now()): ProgressStat
   const settings = object(source.settings);
   for (const key of ['sound', 'music', 'haptic'] as const) if (typeof settings[key] === 'boolean') state.settings[key] = settings[key];
   state.tutorialDone = source.tutorialDone === true;
-  state.checkpoint = sanitizeCheckpoint(source.checkpoint, state, now);
+  const legacy = sanitizeCheckpoint(source.checkpoint, state, now);
+  state.checkpoint = legacy && !legacy.daily ? legacy : null;
+  const dailyCheckpoint = sanitizeCheckpoint(source.dailyCheckpoint, state, now);
+  state.dailyCheckpoint = state.daily.completed ? null : dailyCheckpoint?.daily ? dailyCheckpoint : legacy?.daily ? legacy : null;
   return state;
 }
 const boolArray = (value: unknown): boolean[] | null => {
@@ -144,7 +148,7 @@ function sanitizeCheckpoint(value: unknown, state: ProgressState, now: number): 
   try {
     // A different catalogue must never reinterpret saved screw bitsets as a
     // random daily board. Keep earned currency/stars and discard only that attempt.
-    const expectedSeed=daily?Number(date.replace(/-/g,'')):generateLevel(level).seed;
+    const expectedSeed=daily?dailyPuzzleSeed(date):generateLevel(level).seed;
     if(Number(raw.seed)!==expectedSeed)return null;
     const generated = generateLevel(Number(raw.levelId), Number(raw.seed));
     let holes: Hole[];
@@ -198,9 +202,10 @@ function decode(text: string | null, now: number): ProgressState | null {
 export function encodeProgress(state: ProgressState, forCloud = false): string {
   let stars = '';
   for (let level = 1; level <= CAMPAIGN_LEVELS; level++) stars += String(state.stars[String(level)] || 0);
-  const wire = { ...state, stars, checkpoint: compactCheckpoint(state.checkpoint) };
+  const wire = { ...state, stars, checkpoint: compactCheckpoint(state.checkpoint), dailyCheckpoint: compactCheckpoint(state.dailyCheckpoint) };
   let payload = JSON.stringify(wire);
-  if (forCloud && new TextEncoder().encode(payload).length > 4_000) payload = JSON.stringify({ ...wire, checkpoint: null });
+  if (forCloud && new TextEncoder().encode(payload).length > 4_000) payload = JSON.stringify({ ...wire, dailyCheckpoint: null });
+  if (forCloud && new TextEncoder().encode(payload).length > 4_000) payload = JSON.stringify({ ...wire, dailyCheckpoint: null, checkpoint: null });
   return payload;
 }
 const taskDefinitions = (date: string): { id: string; title: string; goal: number; reward: number }[] => {
@@ -254,6 +259,11 @@ export class Progression {
     }
     const localNewer = local && (!cloud || local.updatedAt > cloud.updatedAt || (local.updatedAt === cloud.updatedAt && local.revision > cloud.revision));
     this.state = (localNewer ? local : cloud) || local || newState(now);
+    // A second moving board can exceed the single VK value limit. The local
+    // daily backup supplements an equally recent cloud save on this device.
+    if (!this.state.dailyCheckpoint && !this.state.daily.completed && local?.dailyCheckpoint &&
+      local.daily.date === this.state.daily.date && local.updatedAt >= this.state.updatedAt)
+      this.state.dailyCheckpoint = local.dailyCheckpoint;
     this.loaded = true;
     this.status = this.vk.cloudAvailable ? (cloud && !localNewer ? 'cloud' : 'pending') : 'local';
     this.dirty = this.vk.cloudAvailable && (!cloud || Boolean(localNewer));
@@ -326,7 +336,7 @@ export class Progression {
     const date = dailyDate(now);
     if (this.state.daily.date !== date) {
       this.state.daily = { date, completed: false, taskProgress: {}, taskClaimed: [] };
-      if (this.state.checkpoint?.daily) this.state.checkpoint = null;
+      this.state.dailyCheckpoint = null;
       changed = true;
     }
     if (changed) this.changed();
@@ -481,11 +491,19 @@ export class Progression {
     this.tick();
     const valid = sanitizeCheckpoint(checkpoint, this.state, this.now());
     if (!valid) return false;
-    this.state.checkpoint = valid; this.changed(); return true;
+    if (valid.daily) this.state.dailyCheckpoint = valid;
+    else this.state.checkpoint = valid;
+    this.changed(); return true;
   }
-  clearCheckpoint(): void {
-    if (!this.state.checkpoint) return;
-    this.state.checkpoint = null; this.changed();
+  clearCheckpoint(daily = false): void {
+    if (daily) {
+      if (!this.state.dailyCheckpoint) return;
+      this.state.dailyCheckpoint = null;
+    } else {
+      if (!this.state.checkpoint) return;
+      this.state.checkpoint = null;
+    }
+    this.changed();
   }
   dispose(): void {
     if (this.saveTimer) clearTimeout(this.saveTimer);

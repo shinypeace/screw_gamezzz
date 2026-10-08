@@ -10,6 +10,9 @@ export const DRILL_RADIUS = .018;
 export const BOLT_RADIUS = .0125;
 const STEP = 1 / 120;
 const SHAFT_CATEGORY = 1;
+// A moving material edge travels less than a shaft radius in one collision
+// solve. Matter's velocity units are pixels per nominal 60 Hz frame.
+const MAX_EDGE_TRAVEL = BOLT_RADIUS * PHYSICS_WIDTH * .38;
 
 export interface DrillPoint { x: number; y: number; sourceHole?: number }
 export interface SupportBinding { material: number; hole: number; x: number; y: number }
@@ -50,7 +53,7 @@ const polygonArea = (v: Matter.Vector[]) => Math.abs(v.reduce((area, p, i) => {
 
 /** A compound strip has actual voids. The full rectangle is only the compound's
  * broad-phase hull: Matter tests its convex material parts against screw shafts.
- * Six small convex slices approximate each circular drill, including off-axis
+ * Eight small convex slices approximate each circular drill, including off-axis
  * holes. The rest of the strip remains large inexpensive rectangular parts. */
 function perforatedBody(plank: Plank, drills: DrillPoint[], category: number): { body: Matter.Body; center: Matter.Vector } {
   const length = plank.length * PHYSICS_WIDTH;
@@ -78,9 +81,14 @@ function perforatedBody(plank: Plank, drills: DrillPoint[], category: number): {
     const right = Math.min(hole.x + radius, length / 2);
     if (right <= left) continue;
     addRect(cursor, left);
-    for (let slice = 0; slice < 6; slice++) {
-      const a = left + (right - left) * slice / 6;
-      const b = left + (right - left) * (slice + 1) / 6;
+    // Equal-angle arc segments keep the circular opening accurate at its
+    // steep outer rim. Equal-x slices narrowed the opening near those rims,
+    // making a correctly aligned returning screw catch on invisible wood.
+    const startArc = Math.acos(Math.max(-1, Math.min(1, (hole.x - left) / radius)));
+    const endArc = Math.acos(Math.max(-1, Math.min(1, (hole.x - right) / radius)));
+    for (let slice = 0; slice < 8; slice++) {
+      const a = hole.x - radius * Math.cos(startArc + (endArc - startArc) * slice / 8);
+      const b = hole.x - radius * Math.cos(startArc + (endArc - startArc) * (slice + 1) / 8);
       // A small clearance absorbs the polygon approximation and constraint
       // tolerances; the visible hole is still larger than the metal shaft.
       const cap = (x: number) => Math.sqrt(Math.max(0, radius * radius - (x - hole.x) ** 2));
@@ -217,14 +225,13 @@ export class BoardPhysics {
     }
     for (const hole of holes) {
       if (!screws[hole.id]) continue;
-      let highestSupportLayer = -Infinity;
-      for (const entry of this.wood.values()) if (entry.bindings.some(b => b.hole === hole.id))
-        highestSupportLayer = Math.max(highestSupportLayer, entry.plank.layer);
-      // An original lower screw is underneath upper wood. Parked screws are
-      // fully exposed and can catch strips from every layer.
+      // Initial buried shafts belong beneath their authored covering wood.
+      // Once a strip clears one, the exposed metal remains solid for *every*
+      // layer. A support on a lower layer cannot make an exposed shaft ghost
+      // through a higher swinging strip later in the same puzzle.
       let mask = 0;
       for (const entry of this.wood.values())
-        if (!entry.occludedShafts.has(hole.id) && (highestSupportLayer === -Infinity || entry.plank.layer <= highestSupportLayer)) mask |= entry.category;
+        if (!entry.occludedShafts.has(hole.id)) mask |= entry.category;
       let shaft = this.shafts.get(hole.id);
       if (!shaft) {
         const point = metric(hole);
@@ -245,6 +252,10 @@ export class BoardPhysics {
     entry.occludedShafts.clear();
     for (const hole of this.holes) {
       if (!this.screws[hole.id]) continue;
+      const original = this.level.holes[hole.id];
+      // A newly parked shaft or an added drill was inserted into clear space.
+      // It must never acquire a transient pass-through exemption on restore.
+      if (!original?.initialScrew || !this.authoredOcclusion(entry, original)) continue;
       const local = this.localShaft(entry, hole);
       // Only a screw center buried inside solid wood is an authored occlusion.
       // A shaft just outside the edge is a real support contact and must stay
@@ -256,14 +267,27 @@ export class BoardPhysics {
       if (inside && !drilled) entry.occludedShafts.add(hole.id);
     }
   }
+  private authoredOcclusion(entry: WoodBody, hole: Hole): boolean {
+    const plank = entry.plank;
+    const dx = (hole.x - plank.x) * PHYSICS_WIDTH;
+    const dy = (hole.y - plank.y) * PHYSICS_WIDTH * PHYSICS_ASPECT;
+    const local = rotate({ x: dx, y: dy }, -plank.angle);
+    const inside = Math.abs(local.x) < plank.length * PHYSICS_WIDTH / 2 - .2 &&
+      Math.abs(local.y) < plank.width * PLANK_WIDTH_SCALE * PHYSICS_WIDTH / 2 - .2;
+    const drilled = entry.drills.some(d => Math.hypot(d.x * PHYSICS_WIDTH - local.x,
+      d.y * PHYSICS_WIDTH - local.y) < (DRILL_RADIUS - BOLT_RADIUS) * PHYSICS_WIDTH + .8);
+    return inside && !drilled;
+  }
   private exposeClearedShafts(): void {
     let changed = false;
     for (const entry of this.wood.values()) for (const id of entry.occludedShafts) {
       const hole = this.holes[id];
       if (!hole || !this.screws[id]) { entry.occludedShafts.delete(id); changed = true; continue; }
       const local = this.localShaft(entry, hole), radius = BOLT_RADIUS * PHYSICS_WIDTH + .5;
+      const clearDrill = entry.drills.some(drill => Math.hypot(drill.x * PHYSICS_WIDTH - local.x,
+        drill.y * PHYSICS_WIDTH - local.y) < (DRILL_RADIUS - BOLT_RADIUS) * PHYSICS_WIDTH - .3);
       if (Math.abs(local.x) > entry.plank.length * PHYSICS_WIDTH / 2 + radius ||
-        Math.abs(local.y) > entry.plank.width * PLANK_WIDTH_SCALE * PHYSICS_WIDTH / 2 + radius) {
+        Math.abs(local.y) > entry.plank.width * PLANK_WIDTH_SCALE * PHYSICS_WIDTH / 2 + radius || clearDrill) {
         entry.occludedShafts.delete(id); changed = true;
       }
     }
@@ -280,11 +304,19 @@ export class BoardPhysics {
       let maxSpeed = 0;
       for (const entry of this.wood.values()) if (!entry.body.isStatic) {
         const body = entry.body;
-        maxSpeed = Math.max(maxSpeed, Matter.Body.getSpeed(body) + Math.abs(Matter.Body.getAngularVelocity(body)) * entry.plank.length * PHYSICS_WIDTH / 2);
+        const materialRadius = Math.hypot(entry.plank.length * PHYSICS_WIDTH / 2,
+          entry.plank.width * PLANK_WIDTH_SCALE * PHYSICS_WIDTH / 2) + Math.hypot(entry.center.x, entry.center.y);
+        maxSpeed = Math.max(maxSpeed, Matter.Body.getSpeed(body) + Math.abs(Matter.Body.getAngularVelocity(body)) * materialRadius);
       }
-      const subdivisions = Math.min(8, Math.max(1, Math.ceil(maxSpeed / 6)));
-      for (let i = 0; i < subdivisions; i++) Matter.Engine.update(this.engine, STEP * 1000 / subdivisions);
-      this.exposeClearedShafts();
+      // Rotation is included at the farthest material point, rather than at
+      // the centre alone: a long hinged strip can have a fast moving tip even
+      // when its centre barely moves. Check newly exposed shafts after *each*
+      // subdivision, before the strip can swing back into them.
+      const subdivisions = Math.min(32, Math.max(1, Math.ceil(maxSpeed * STEP * 60 / MAX_EDGE_TRAVEL)));
+      for (let i = 0; i < subdivisions; i++) {
+        Matter.Engine.update(this.engine, STEP * 1000 / subdivisions);
+        this.exposeClearedShafts();
+      }
       this.accumulator -= STEP;
     }
     for (const [id, entry] of this.wood) {

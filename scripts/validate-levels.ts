@@ -121,6 +121,13 @@ assert.equal(BOARD_ASPECT, 1.2);
 assert.equal(unique.size, LEVEL_COUNT, 'Every campaign graph is mechanically distinct');
 assert.equal(silhouettes.size, LEVEL_COUNT, 'Every campaign has a distinct arrangement of beams');
 assert.equal(new Set(first30.map(l => l.motif)).size, 30, 'All first thirty teaching architectures differ');
+const authoredLaterFamilies=['robot','crab','rocket','key','bamboo','maze','gear','owl','locomotive','crown','scorpion','satellite'];
+for(const family of authoredLaterFamilies) {
+  assert.ok((motifs.get(family)??0)>=10, `The ${family} architecture must recur through genuine bracing variants across the campaign`);
+  assert.ok(Array.from({length:50},(_,i)=>generateLevel(i+31)).some(level=>level.motif===family),
+    `The ${family} architecture is introduced within the first eighty boards`);
+}
+assert.ok(motifs.size>=42, 'The campaign includes all thirty teaching and twelve new authored families');
 assert.ok(first30[0].strips <= 2, 'The tutorial is short');
 assert.ok(first30[4].strips >= 6 && first30[9].strips >= 10 && first30[19].strips >= 16,
   'Complexity rises within the first twenty levels, not after hundreds of boards');

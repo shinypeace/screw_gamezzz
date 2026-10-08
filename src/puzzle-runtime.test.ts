@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { performance } from 'node:perf_hooks';
-import { BOARD_ASPECT, Puzzle, generateLevel, plankContains, type Level, type PhysicalPuzzleSnapshot } from './puzzle';
+import { BOARD_ASPECT, Puzzle, dailyPuzzleSeed, generateDailyLevel, generateLevel, plankContains, type Level, type PhysicalPuzzleSnapshot } from './puzzle';
 
 test('the authored solution remains available with no runtime search budget', () => {
   const level = generateLevel(600);
@@ -58,6 +58,16 @@ test('a bolt can return into the same material drill, but not through solid wood
   assert.deepEqual(puzzle.remainingPins(0), [0, 1]);
   assert.equal(puzzle.getSupportBindings(0)[0].material, 0);
   assert.equal(puzzle.getPose(0).width, .055 * 1.1);
+});
+
+test('parking requires clearance for the entire metal shaft beside a material edge', () => {
+  const level = drilledBeam();
+  const halfWidth = level.planks[0].width * 1.1 / 2;
+  level.holes.push({ id: 6, x: .5, y: .5 + (halfWidth + .01) / BOARD_ASPECT, initialScrew: false },
+    { id: 7, x: .5, y: .5 + (halfWidth + .015) / BOARD_ASPECT, initialScrew: false });
+  const puzzle = new Puzzle(level, undefined, { physical: true });
+  assert.equal(puzzle.canMove(0, 6), false, 'a visible hole centre cannot insert a metal shaft into the wooden edge');
+  assert.equal(puzzle.canMove(0, 7), true, 'clear space beyond the shaft radius remains a usable parking hole');
 });
 
 test('material drills follow actual rotation and bind a different aligned board hole', () => {
@@ -180,4 +190,17 @@ test('repeated physical undo restores the initial hint order without stale cycle
     assert.deepEqual(puzzle.hint(), initial, 'the undone move cannot suppress a valid authored source or destination');
     assert.ok(puzzle.canMove(initial.from, initial.to));
   }
+});
+
+test('daily geometry has a shared dated catalogue seed and rejects old raw-date saves', () => {
+  const date = '2026-10-08', seed = dailyPuzzleSeed(date);
+  assert.equal(seed, dailyPuzzleSeed(date));
+  assert.notEqual(seed, dailyPuzzleSeed('2026-10-09'));
+  assert.notEqual(seed, Number(date.replaceAll('-', '')));
+  const level = generateDailyLevel(date);
+  assert.equal(level.seed, seed);
+  const puzzle = new Puzzle(level, undefined, { physical: true }), save = puzzle.snapshot();
+  assert.ok(puzzle.restore(save));
+  save.seed = Number(date.replaceAll('-', ''));
+  assert.equal(puzzle.restore(save), false);
 });

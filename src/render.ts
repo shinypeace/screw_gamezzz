@@ -15,12 +15,13 @@ export class Renderer {
   resize() {
     const el=document.getElementById('game')!;
     const viewHeight=window.innerHeight-this.insets.top-this.insets.bottom-this.insets.banner;
-    const maxW=Math.min(window.innerWidth,viewHeight*.57,520);
+    const portraitPhone=window.innerWidth<=600&&window.innerWidth<=window.innerHeight;
+    const maxW=portraitPhone?window.innerWidth:Math.min(window.innerWidth,viewHeight*.57,520);
     el.style.width=`${maxW}px`;
     el.style.height=`${viewHeight}px`;
     el.style.marginTop=`${this.insets.top}px`;
     const rect=el.getBoundingClientRect();
-    this.scale=Math.min(rect.width/W,rect.height/680);
+    this.scale=rect.width/W;
     this.h=rect.height/this.scale;
     const dpr=Math.min(window.devicePixelRatio||1,2);
     this.canvas.width=Math.round(rect.width*dpr);this.canvas.height=Math.round(rect.height*dpr);

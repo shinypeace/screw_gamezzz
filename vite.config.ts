@@ -31,6 +31,13 @@ export default defineConfig({
   plugins: [serveDevelopmentEntry],
   build: {
     target: 'es2020',
-    rollupOptions: { input: developmentEntry },
+    rollupOptions: {
+      input: developmentEntry,
+      output: {
+        manualChunks(id) {
+          return id.replaceAll('\\', '/').match(/\/src\/levels\/(levels-\d+-\d+)\.ts$/)?.[1];
+        },
+      },
+    },
   },
 });
